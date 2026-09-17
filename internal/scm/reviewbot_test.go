@@ -53,3 +53,29 @@ func TestReviewBotLoginsAreProviderScoped(t *testing.T) {
 		}
 	}
 }
+
+func TestCodeRabbitRegistryRequiresImmutableGitHubIdentity(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		check Check
+		want  bool
+	}{
+		{Check{App: "coderabbitai"}, false},
+		{Check{App: "coderabbitai", AppID: 1, AppHost: "github.com"}, false},
+		{Check{App: "coderabbitai", AppID: CodeRabbitAppID, AppHost: "ghe.example.com"}, false},
+		{Check{AppID: CodeRabbitAppID, AppHost: "github.com"}, true},
+		{Check{App: "greptile-apps"}, true},
+	} {
+		_, ok := ReviewBotForCheck(tc.check)
+		if ok != tc.want {
+			t.Fatalf("check=%+v matched=%v want=%v", tc.check, ok, tc.want)
+		}
+	}
+	bot, ok := ReviewBotForLogin(ProviderGitHub, "coderabbitai[bot]")
+	if !ok || bot.Name != "coderabbit" || bot.AuthorID != 136622811 || bot.AppID != 347564 {
+		t.Fatalf("CodeRabbit registry = %+v, %v", bot, ok)
+	}
+	if _, ok := ReviewBotForLogin(ProviderGitHub, "coderabbitai"); ok {
+		t.Fatal("human account must not impersonate CodeRabbit bot")
+	}
+}

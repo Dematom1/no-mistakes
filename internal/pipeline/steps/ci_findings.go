@@ -94,9 +94,20 @@ type ciIssues struct {
 func ciObservationFindings(issues ciIssues) Findings {
 	var items []Finding
 	codeChecks := 0
+	externalReviews := 0
 	var botChecks []reviewBotCheck
 	for _, check := range selectedFailingChecks(issues.checks, issues.failing) {
-		if bot, ok := scm.ReviewBotForApp(check.App); ok {
+		if _, known := scm.ReviewBotForCheck(check); check.ExternalReview != "" && !known {
+			externalReviews++
+			items = append(items, Finding{
+				Severity: types.FindingSeverityWarning, Action: types.ActionAskUser,
+				Category: types.FindingCategoryCIReviewBot,
+				Check:    check.Name, CheckID: check.ProviderID,
+				Description: fmt.Sprintf("Required external review %s is %s at the current PR head; completion is not proven. Strict completion gating is supported only for documented reviewer profiles on supported forges.", check.ExternalReview, check.State),
+			})
+			continue
+		}
+		if bot, ok := scm.ReviewBotForCheck(check); ok {
 			botChecks = append(botChecks, reviewBotCheck{check: check, bot: bot})
 			continue
 		}
@@ -134,6 +145,9 @@ func ciObservationFindings(issues ciIssues) Findings {
 	items = append(items, transient...)
 
 	var parts []string
+	if externalReviews > 0 {
+		parts = append(parts, fmt.Sprintf("%d required external reviews incomplete", externalReviews))
+	}
 	switch codeChecks {
 	case 0:
 	case 1:
@@ -226,7 +240,7 @@ func reviewBotFindings(provider scm.Provider, checks []reviewBotCheck, comments 
 		hasComments := false
 		for _, comment := range comments {
 			author, ok := scm.ReviewBotForLogin(provider, comment.Author)
-			if !ok || author.AppSlug != checked.bot.AppSlug {
+			if !ok || author.AppSlug != checked.bot.AppSlug || author.AuthorID != 0 && comment.AuthorID != author.AuthorID {
 				continue
 			}
 			hasComments = true
@@ -258,13 +272,20 @@ func reviewBotFindings(provider scm.Provider, checks []reviewBotCheck, comments 
 			continue
 		}
 		description := fmt.Sprintf("Review bot check failing: %s", checked.check.Name)
+		if checked.check.ExternalReview != "" {
+			description = fmt.Sprintf("Required external review %s is %s at the current PR head", checked.check.ExternalReview, checked.check.State)
+		}
 		if link := strings.TrimSpace(checked.check.Link); link != "" {
 			description += " - " + link
 		}
 		if hasComments {
 			description += " - its unresolved comments are represented by another failed check from the same app"
 		} else {
-			description += " - no unresolved review comments were found, so decide whether to proceed"
+			if checked.check.ExternalReview != "" {
+				description += " - review completion or resolution is still required"
+			} else {
+				description += " - no unresolved review comments were found, so decide whether to proceed"
+			}
 		}
 		candidates = append(candidates, Finding{
 			Severity:    types.FindingSeverityWarning,
@@ -357,7 +378,7 @@ func greenReviewBotChecks(checks []scm.Check) []reviewBotCheck {
 	var green []reviewBotCheck
 	present := map[string]bool{}
 	for _, check := range checks {
-		bot, ok := scm.ReviewBotForApp(check.App)
+		bot, ok := scm.ReviewBotForCheck(check)
 		if !ok {
 			continue
 		}
@@ -400,7 +421,7 @@ func readReviewBotComments(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR
 func reviewBotComments(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, checks []scm.Check) []scm.ReviewComment {
 	wanted := reviewBotCommentsAlways(sctx) && len(greenReviewBotChecks(checks)) > 0
 	for _, check := range checks {
-		if _, ok := scm.ReviewBotForApp(check.App); ok && check.Failing() {
+		if _, ok := scm.ReviewBotForCheck(check); ok && check.Failing() {
 			wanted = true
 			break
 		}

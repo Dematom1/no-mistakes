@@ -235,6 +235,9 @@ func (s *CIStep) VerifyApprovalOverride(sctx *pipeline.StepContext) (string, err
 	// comes from that same head read, exactly as the polling loop names it.
 	pr.HeadSHA = sctx.Run.HeadSHA
 	checks, err := host.GetChecks(ctx, pr)
+	if err == nil {
+		checks, err = requiredReviewChecks(sctx, host, pr, checks)
+	}
 	if err != nil {
 		if errors.Is(err, scm.ErrHeadChanged) {
 			// The provider answered; nothing it offered is evidence for the
@@ -346,12 +349,18 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 	provider := resolvedProvider(sctx)
 	host, skipReason := buildHost(sctx, provider)
 	if host == nil {
+		if requiresExternalReview(sctx) {
+			return ciCheckReadFailureOutcome(fmt.Errorf("required external review unavailable: %s", skipReason)), nil
+		}
 		sctx.Log(fmt.Sprintf("skipping CI: %s", skipReason))
 		return &pipeline.StepOutcome{Skipped: true, SkipReason: skipReason}, nil
 	}
 	if err := host.Available(ctx); err != nil {
 		if pluginContractBroken(err) {
 			return nil, err
+		}
+		if requiresExternalReview(sctx) {
+			return ciCheckReadFailureOutcome(err), nil
 		}
 		sctx.Log(fmt.Sprintf("skipping CI: %v", err))
 		return &pipeline.StepOutcome{Skipped: true, SkipReason: err.Error()}, nil
@@ -371,6 +380,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 		}
 	}
 	if prURL == "" {
+		if requiresExternalReview(sctx) {
+			return ciCheckReadFailureOutcome(fmt.Errorf("required external review has no PR URL")), nil
+		}
 		sctx.Log("no PR URL found, skipping CI")
 		return &pipeline.StepOutcome{Skipped: true, SkipReason: "no PR URL found"}, nil
 	}
@@ -487,6 +499,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 	behindBaseTip := ""
 	mergeabilityBlockedReason := ""
 	var timeoutFailingChecks []scm.CheckTarget
+	var timeoutExternalReviews []scm.Check
 	timeoutMergeConflict := false
 	lastMonitorLog := ""
 	consecutiveCheckErrs := 0
@@ -500,6 +513,15 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 			outcome = ciMergeabilityOutcome("mergeability check timed out", mergeabilityBlockedReason)
 		} else {
 			outcome = ciMonitoringTimeoutOutcome()
+		}
+		if len(timeoutExternalReviews) > 0 {
+			external := ciObservationFindings(ciIssues{checks: timeoutExternalReviews, failing: failingCheckNames(timeoutExternalReviews)})
+			if len(timeoutFailingChecks) > 0 || timeoutMergeConflict || mergeabilityBlockedReason != "" {
+				prior, _ := types.ParseFindingsJSON(outcome.Findings)
+				external.Items = append(prior.Items, external.Items...)
+				external.Summary = prior.Summary + "; " + external.Summary
+			}
+			outcome = ciObservationOutcome(external)
 		}
 		return ciTerminalRepairOutcome(outcome, Findings{}, sctx.DeferredFindings), nil
 	}
@@ -632,6 +654,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 		// Check CI status - wait for all checks to complete before escalating
 		pr.HeadSHA = sctx.Run.HeadSHA
 		checks, err := host.GetChecks(ctx, pr)
+		if err == nil {
+			checks, err = requiredReviewChecks(sctx, host, pr, checks)
+		}
 		if err != nil && pluginPollFailsStep(err) {
 			clearCIMonitorReady(sctx)
 			return nil, err
@@ -666,6 +691,14 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 			}
 		} else {
 			consecutiveCheckErrs = 0
+			timeoutExternalReviews = nil
+			for _, check := range checks {
+				if check.ExternalReview != "" && check.Bucket != scm.CheckBucketPass {
+					check.Bucket = scm.CheckBucketFail
+					check.State += " (CI TIMEOUT)"
+					timeoutExternalReviews = append(timeoutExternalReviews, check)
+				}
+			}
 			// A failure the provider produced before the repository's own steps
 			// ran (a setup/action-resolution outage) is infrastructure, not a
 			// verdict on the code. Re-bucket those into the transient path before
@@ -762,6 +795,17 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 			// stays the set the fix agent is asked to repair.
 			reportedIssues := mergeCheckNames(failing, unresolvedCancelled)
 			timeoutFailingChecks = terminalCheckTargetsForNames(checks, mergeCheckNames(reportedIssues, awaitingRerun))
+			// Synthetic review requirements are decisions, including at timeout;
+			// never hand their IDs to the generic job-repair outcome.
+			for _, check := range checks {
+				if check.ExternalReview != "" {
+					for i := len(timeoutFailingChecks) - 1; i >= 0; i-- {
+						if timeoutFailingChecks[i].ProviderID == check.ProviderID {
+							timeoutFailingChecks = append(timeoutFailingChecks[:i], timeoutFailingChecks[i+1:]...)
+						}
+					}
+				}
+			}
 
 			if hasIssues || len(awaitingRerun) > 0 {
 				if err := setCIMonitorReadiness(sctx, false, false); err != nil {

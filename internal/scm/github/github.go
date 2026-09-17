@@ -23,12 +23,13 @@ type CmdFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 // Host talks to GitHub through the gh CLI.
 type Host struct {
-	cmd          CmdFactory
-	cliAvailable func() bool
-	host         string // repo's GitHub hostname; scopes the auth check
-	repo         string // "owner/name" slug for --repo; empty when unknown
-	forkOwner    string // fork owner for cross-repository PR heads
-	draft        bool   // open created PRs as drafts (gh pr create --draft)
+	cmd             CmdFactory
+	cliAvailable    func() bool
+	host            string // repo's GitHub hostname; scopes the auth check
+	repo            string // "owner/name" slug for --repo; empty when unknown
+	forkOwner       string // fork owner for cross-repository PR heads
+	requiredReviews []string
+	draft           bool // open created PRs as drafts (gh pr create --draft)
 	// assetHTTP and assetUploadPrefix override the unofficial user-attachments
 	// upload transport in tests. Production leaves both nil/empty and uses
 	// http.DefaultClient against uploads.github.com (or uploads.<ghec-host>).
@@ -53,6 +54,13 @@ func New(cmd CmdFactory, cliAvailable func() bool, host, repo string) *Host {
 		host:         strings.TrimSpace(host),
 		repo:         strings.TrimSpace(repo),
 	}
+}
+
+// WithRequiredReviews opts the existing check adapter into strict completion
+// semantics for the named review bots. The default does no extra discovery.
+func (h *Host) WithRequiredReviews(reviewers []string) *Host {
+	h.requiredReviews = append([]string(nil), reviewers...)
+	return h
 }
 
 // NewWithFork builds a Host that opens PRs on repo using forkRepo as the head
@@ -487,7 +495,7 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 		return nil, err
 	}
 	headSHA := ""
-	if strings.TrimSpace(pr.HeadSHA) != "" {
+	if strings.TrimSpace(pr.HeadSHA) != "" || len(h.requiredReviews) > 0 {
 		headSHA, err = h.getPRHeadSHA(ctx, selector)
 		if err != nil {
 			return nil, err
@@ -518,6 +526,13 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 			return nil, fmt.Errorf("PR head changed during check discovery from %s to %s", headSHA, currentHeadSHA)
 		}
 	}
+	for _, reviewer := range h.requiredReviews {
+		checks, err = h.requiredReviewChecks(ctx, pr, reviewer, checks)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return checks, nil
 }
 
@@ -566,9 +581,9 @@ func (h *Host) getPRChecks(ctx context.Context, selector string) ([]scm.Check, e
 // carries its check suite's app slug: that is the structural identity the CI
 // step uses to tell a third-party review bot's check (scm.ReviewBots) from the
 // repository's own Actions jobs, without matching check names.
-const commitChecksQuery = `query($owner:String!,$name:String!,$oid:String!,$cursor:String){repository(owner:$owner,name:$name){object(expression:$oid){... on Commit{statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{databaseId name status conclusion completedAt startedAt detailsUrl checkSuite{app{slug}}} ... on StatusContext{id context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}`
+const commitChecksQuery = `query($owner:String!,$name:String!,$oid:String!,$cursor:String){repository(owner:$owner,name:$name){object(expression:$oid){... on Commit{statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{databaseId name status conclusion completedAt startedAt detailsUrl checkSuite{app{slug databaseId}}} ... on StatusContext{id context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}`
 
-const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{isResolved comments(first:100){nodes{databaseId body path line url createdAt author{login}}}} pageInfo{hasNextPage endCursor}}}}}`
+const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{isResolved comments(first:100){nodes{databaseId body path line url createdAt author{login ... on Bot{databaseId}}}}} pageInfo{hasNextPage endCursor}}}}}`
 
 func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check, error) {
 	repo := h.repoSlug()
@@ -610,7 +625,8 @@ func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check
 									DetailsURL  string `json:"detailsUrl"`
 									CheckSuite  *struct {
 										App *struct {
-											Slug string `json:"slug"`
+											Slug       string `json:"slug"`
+											DatabaseID int64  `json:"databaseId"`
 										} `json:"app"`
 									} `json:"checkSuite"`
 									Context   string `json:"context"`
@@ -657,6 +673,9 @@ func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check
 				check.Link = strings.TrimSpace(node.DetailsURL)
 				if node.CheckSuite != nil && node.CheckSuite.App != nil {
 					check.App = strings.TrimSpace(node.CheckSuite.App.Slug)
+					check.AppID = node.CheckSuite.App.DatabaseID
+					check.AppHost = strings.ToLower(h.host)
+					check.HeadSHA = headSHA
 				}
 				if parsed, parseErr := time.Parse(time.RFC3339, node.CompletedAt); parseErr == nil {
 					check.CompletedAt = parsed
@@ -1527,7 +1546,7 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 			Data struct {
 				Repository *struct {
 					PullRequest *struct {
-						ReviewThreads struct {
+						ReviewThreads *struct {
 							Nodes []struct {
 								IsResolved bool `json:"isResolved"`
 								Comments   struct {
@@ -1540,6 +1559,7 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 										CreatedAt time.Time `json:"createdAt"`
 										Author    *struct {
 											Login string `json:"login"`
+											ID    int64  `json:"databaseId"`
 										} `json:"author"`
 									} `json:"nodes"`
 								} `json:"comments"`
@@ -1566,12 +1586,19 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 			return nil, errors.New("PR review comments response did not contain the pull request")
 		}
 		threads := response.Data.Repository.PullRequest.ReviewThreads
+		if threads == nil || threads.Nodes == nil {
+			return nil, errors.New("PR review comments response did not contain review threads")
+		}
 		for _, thread := range threads.Nodes {
 			if thread.IsResolved {
 				continue
 			}
 			for _, raw := range thread.Comments.Nodes {
 				if raw.Author == nil || !scm.IsReviewBotLogin(scm.ProviderGitHub, raw.Author.Login) {
+					continue
+				}
+				bot, _ := scm.ReviewBotForLogin(raw.Author.Login)
+				if bot.AuthorID != 0 && (h.host != "github.com" || raw.Author.ID != bot.AuthorID) {
 					continue
 				}
 				line := 0
@@ -1581,6 +1608,7 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 				comments = append(comments, scm.ReviewComment{
 					ID:        strconv.FormatInt(raw.ID, 10),
 					Author:    raw.Author.Login,
+					AuthorID:  raw.Author.ID,
 					Path:      raw.Path,
 					Line:      line,
 					Body:      raw.Body,

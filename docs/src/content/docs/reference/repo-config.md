@@ -8,7 +8,7 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` and `gates[].command` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor` and `devin`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.conversation`, `review.path_instructions`, `review.agent_timeout`, `gates`, `auto_fix.gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `ci.rerun_transient`, `ci.revalidate_repairs`, `ci.review_bot_comments`, `ci.rebase_behind`, `ci.carry_review_on_replay`, `ci.release_after_checks_pass`, `rebase.strategy`, `test.prepare`, `test.base_attribution`, `test.instructions`, `test.allow_approve_over_failure`, `test.evidence.branch`, `pr.template`, `pr.publish_intent`, and `pr.appendix` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.conversation`, `review.path_instructions`, `review.agent_timeout`, `gates`, `auto_fix.gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `ci.rerun_transient`, `ci.revalidate_repairs`, `ci.required_reviews`, `ci.review_bot_comments`, `ci.rebase_behind`, `ci.carry_review_on_replay`, `ci.release_after_checks_pass`, `rebase.strategy`, `test.prepare`, `test.base_attribution`, `test.instructions`, `test.allow_approve_over_failure`, `test.evidence.branch`, `pr.template`, `pr.publish_intent`, and `pr.appendix` only from that trusted copy.
 `pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
@@ -88,6 +88,7 @@ ci:
   review_bot_comments: on_failure # or: always
   rebase_behind: false
   carry_review_on_replay: false
+  required_reviews: [] # opt in with: [coderabbit]
 
 # How a base branch that moved under your branch is integrated.
 # Read only from the trusted default branch.
@@ -773,6 +774,54 @@ Reruns are skipped when:
 - The provider has no rerun API (only GitHub implements one today; GitLab, Forgejo, Bitbucket Cloud, Azure DevOps, Gitea, Cursor Origin, and provider plugins reach the approval gate without a rerun).
 - The check's details link names nothing the provider can re-run, for example a third-party status pointing at an external dashboard, or a link under a workflow run that names no job the API accepts. A link naming one job re-runs that job; a cancelled check naming only the workflow run re-runs the whole workflow, while other run-only links re-run failed jobs; an unrecognized link is widened into neither.
 - The published branch head no longer equals the commit the run delivered. That case terminates with the expected and observed commits instead: re-running checks against a different head would certify a revision this run never produced. See [pipeline steps: CI](/no-mistakes/reference/pipeline-steps/#ci).
+
+### ci.required_reviews
+
+An optional list of external reviewers that must finish before the CI monitor reports `checks-passed`.
+The default is `[]`; the only supported reviewer profile is `coderabbit` on GitHub.com.
+Enable it in the trusted default branch's `.no-mistakes.yaml`:
+
+```yaml
+ci:
+  required_reviews: [coderabbit]
+```
+
+The whole `ci` block is trusted-only, even with `allow_repo_commands: true`.
+A pushed branch cannot disable the requirement or enable it for itself.
+A repository value overrides the operator's global list; an explicit `[]` disables the requirement, while omission inherits the global value.
+Unknown or duplicate reviewer names fail configuration loading.
+
+CodeRabbit must already be installed for the repository by its administrator.
+no-mistakes uses the existing GitHub CLI authentication for read-only observation and adds no CodeRabbit credentials or installation flow.
+When the list is empty, no additional completion checks are made.
+Existing CI and Greptile behavior stays unchanged; native failed CodeRabbit checks use the same review-bot findings path as Greptile.
+
+Completion requires the latest `CodeRabbit` check run from GitHub.com app ID `347564`, a nonempty immutable check-run ID, `status: completed`, `conclusion: success`, and a `head_sha` matching the exact current PR head.
+The adapter pins the check query to that SHA and verifies the live PR head before and after discovery.
+Names, slugs, formal approvals, and review/comment bodies cannot establish completion.
+Unresolved CodeRabbit review-thread comments from the verified GitHub bot account become bounded `ask-user` findings in the existing review model, even when the required completion check succeeded.
+Their bodies are untrusted evidence and cannot instruct the fix agent; the [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns that shared handling.
+GitHub's [check runs API](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference) owns the check fields; CodeRabbit documents its [GitHub check](https://docs.coderabbit.ai/platforms/github-com).
+
+Missing and in-progress reviews keep readiness false and wait under the existing `ci_timeout` policy.
+Skipped, stale, neutral, failed, cancelled, timed-out, unknown terminal outcomes, and rate-limited reviews remain incomplete and produce `ask-user` findings without spending an automatic repair round.
+Unreadable, malformed, partial, or mismatched evidence cannot make the monitor ready.
+`no_ci: true` does not waive an external-review requirement.
+Approving an unresolved CI gate records an override, never clean review completion.
+
+CodeRabbit [documents a passing check titled `Review rate limited`](https://docs.coderabbit.ai/management/rate-limits) when no review ran.
+That name or output title vetoes completion even alongside another successful check at the same head.
+A separately named rate-limit check remains blocking while GitHub still returns it among the latest checks at that head; no-mistakes does not guess from comment text that the limit has cleared.
+The monitor never posts review commands, requests a paid review, or retries a review on the provider's behalf.
+
+Strict gating on GitLab and other forges is unsupported and parks with an explicit unsupported finding when enabled.
+GitLab approvals and discussion activity are not a documented CodeRabbit completion signal.
+GitHub Enterprise Server is also unsupported because its separately installed app has a different immutable identity.
+Leave this setting empty on those platforms to retain normal CI behavior.
+
+This gates no-mistakes readiness, not direct forge merges or merge-queue synthetic commits.
+The merge caller must recheck readiness for the current head and bind its merge request to that SHA.
+Configure forge protection separately if merges outside no-mistakes must be prevented.
 
 ### ci.revalidate_repairs
 

@@ -89,6 +89,7 @@ ci:
   rebase_behind: false
   carry_review_on_replay: false
   release_after_checks_pass: false
+  required_reviews: []
 
 rebase:
   strategy: rebase # or: merge
@@ -989,6 +990,12 @@ Each rerun is another provider-side workflow run billed to the repository being 
 Set `0` here to never spend someone else's CI minutes; this is the only place to make that choice for a repository whose default branch you do not control.
 
 The per-repo [`ci.rerun_transient`](/no-mistakes/reference/repo-config/#cirerun_transient) overrides this value and owns the classification, the trust boundary, and every case that skips the rerun.
+
+### ci.required_reviews
+
+The operator-level fallback for [`ci.required_reviews`](/no-mistakes/reference/repo-config/#cirequired_reviews).
+That reference owns supported reviewer profiles, completion evidence, and the trust boundary.
+Defaults to `[]`; the trusted repository list overrides it, including an explicit empty list.
 
 ### ci.revalidate_repairs
 

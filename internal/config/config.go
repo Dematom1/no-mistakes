@@ -721,6 +721,8 @@ type AutoFixRaw struct {
 // CIRaw is the YAML representation of CI-step settings.
 // Pointer fields distinguish "not set" (nil) from "set to 0" (disabled).
 type CIRaw struct {
+	RequiredReviews []string `yaml:"required_reviews"`
+
 	RerunTransient *int `yaml:"rerun_transient"`
 	// RevalidateRepairs is a pointer so an explicit `false` in a repository's
 	// config can override a global `true`, which a plain bool could not
@@ -739,6 +741,9 @@ type CIRaw struct {
 
 // CI holds the resolved CI-step settings.
 type CI struct {
+	// RequiredReviews names external reviewers whose completion gates readiness.
+	RequiredReviews []string
+
 	// RerunTransient is how many times the CI step may re-run a single check
 	// the provider reported as cancelled - the one terminal outcome it
 	// attributes to itself rather than to the job - before that check reaches
@@ -1708,6 +1713,8 @@ auto_fix:
 # default branch overrides this value.
 ci:
   rerun_transient: 0
+  # Optional external review completion gate; repository reference owns support.
+  required_reviews: []
   # Whether EVERY CI repair must re-pass the whole pipeline before it is
   # published, or only the ones whose continuity with the reviewed head cannot
   # be proven. Defaults to false: a repair that descends from the reviewed head
@@ -2712,6 +2719,9 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	if err := validateWorktreeRaw(raw.Worktree); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
+	if err := validateRequiredReviews(raw.CI.RequiredReviews); err != nil {
+		return nil, fmt.Errorf("parse global config: %w", err)
+	}
 	if err := validateRebaseRaw(raw.Rebase); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
@@ -3085,6 +3095,9 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
 	if err := validateGateFixLimits(cfg.AutoFix.Gates, cfg.Gates); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
+	if err := validateRequiredReviews(cfg.CI.RequiredReviews); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
 	if err := validateRebaseRaw(cfg.Rebase); err != nil {
@@ -3801,6 +3814,10 @@ func validateRebaseRaw(r RebaseRaw) error {
 // inverting the bound, and anything above MaxCIRerunTransient is capped so a
 // typo cannot keep a run polling one commit indefinitely.
 func applyCIOverrides(dst *CI, src *CIRaw) {
+	if src.RequiredReviews != nil {
+		dst.RequiredReviews = append([]string{}, src.RequiredReviews...)
+	}
+
 	if src.RerunTransient != nil {
 		dst.RerunTransient = min(max(*src.RerunTransient, 0), MaxCIRerunTransient)
 	}
