@@ -75,7 +75,7 @@ func TestCodeRabbitRegistryRequiresImmutableGitHubIdentity(t *testing.T) {
 	if !ok || bot.Name != "coderabbit" || bot.AuthorID != 136622811 || bot.AppID != 347564 {
 		t.Fatalf("CodeRabbit registry = %+v, %v", bot, ok)
 	}
-	if _, ok := ReviewBotForLogin(ProviderGitHub, "coderabbitai"); ok {
-		t.Fatal("human account must not impersonate CodeRabbit bot")
+	if bot, ok := ReviewBotForLogin(ProviderGitHub, "coderabbitai"); !ok || bot.AuthorID != CodeRabbitAuthorID {
+		t.Fatal("GraphQL login must resolve to the immutable CodeRabbit identity")
 	}
 }

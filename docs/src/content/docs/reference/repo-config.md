@@ -807,7 +807,7 @@ Missing and in-progress reviews keep readiness false and wait under the existing
 Skipped, stale, neutral, failed, cancelled, timed-out, unknown terminal outcomes, and rate-limited reviews remain incomplete and produce `ask-user` findings without spending an automatic repair round.
 Unreadable, malformed, partial, or mismatched evidence cannot make the monitor ready.
 `no_ci: true` does not waive an external-review requirement.
-Approving an unresolved CI gate records an override, never clean review completion.
+Approval is refused while any required review is incomplete, has unresolved findings, or cannot be verified at the current PR head. The run fails without completing CI; resolve the review and rerun. Once required reviews are complete, approval of unrelated CI failures retains the existing explicit-override behavior.
 
 CodeRabbit [documents a passing check titled `Review rate limited`](https://docs.coderabbit.ai/management/rate-limits) when no review ran.
 That name or output title vetoes completion even alongside another successful check at the same head.

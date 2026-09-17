@@ -178,9 +178,9 @@ func TestCodeRabbitReviewCommentsShareThreadFiltering(t *testing.T) {
 	for _, hostName := range []string{"github.com", "ghe.example.com"} {
 		t.Run(hostName, func(t *testing.T) {
 			threads := `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
-   {"isResolved":true,"comments":{"nodes":[{"databaseId":1,"body":"resolved","author":{"login":"coderabbitai[bot]","databaseId":136622811}}]}},
-   {"isResolved":false,"comments":{"nodes":[{"databaseId":2,"body":"real","path":"main.go","line":7,"author":{"login":"coderabbitai[bot]","databaseId":136622811}}]}},
-   {"isResolved":false,"comments":{"nodes":[{"databaseId":3,"body":"spoof","author":{"login":"coderabbitai[bot]","databaseId":1}}]}},
+   {"isResolved":true,"comments":{"nodes":[{"databaseId":1,"body":"resolved","author":{"login":"coderabbitai","databaseId":136622811}}]}},
+   {"isResolved":false,"comments":{"nodes":[{"databaseId":2,"body":"real","path":"main.go","line":7,"author":{"login":"coderabbitai","databaseId":136622811}}]}},
+   {"isResolved":false,"comments":{"nodes":[{"databaseId":3,"body":"spoof","author":{"login":"coderabbitai","databaseId":1}}]}},
    {"isResolved":false,"comments":{"nodes":[{"databaseId":4,"body":"Greptile","author":{"login":"greptile-apps[bot]"}}]}}
   ],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`
 			command := "gh api --hostname " + hostName + " graphql -f query=" + reviewThreadsQuery + " -F owner=test -F name=repo -F number=42"

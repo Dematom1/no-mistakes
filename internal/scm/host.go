@@ -260,7 +260,7 @@ const CodeRabbitAuthorID int64 = 136622811
 // bot is one entry here.
 var ReviewBots = []ReviewBot{
 	{AppSlug: "greptile-apps", Logins: []string{"greptile-apps[bot]", "greptile-apps"}, GitLabLogins: []string{"greptileai"}},
-	{Name: "coderabbit", AppSlug: "coderabbitai", AppID: CodeRabbitAppID, AuthorID: CodeRabbitAuthorID, Logins: []string{"coderabbitai[bot]"}},
+	{Name: "coderabbit", AppSlug: "coderabbitai", AppID: CodeRabbitAppID, AuthorID: CodeRabbitAuthorID, Logins: []string{"coderabbitai", "coderabbitai[bot]"}},
 }
 
 // ReviewBotForApp returns the registered review bot that publishes checks

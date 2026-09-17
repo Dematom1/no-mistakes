@@ -188,20 +188,17 @@ func (s *CIStep) ReconcileApprovalGate(sctx *pipeline.StepContext) (bool, error)
 	}
 }
 
-// VerifyApprovalOverride implements pipeline.ApprovalOverrideVerifier. It
-// re-polls the live checks once, synchronously, at the moment a human answers
-// ActionApprove on a CI gate raised by ciFailureOutcome, so an approval over
-// checks that are not genuinely all green can never be silently reported as a
-// plain "outcome=passed" - see the interface doc for the incident this exists
-// for. Resolution uses allChecksPassed - the same trusted all-green semantics
-// the CI step's own polling loop uses (see its allChecksPassed callsite) -
-// rather than the narrower !hasFailingChecks, because an empty check list or
-// a check still pending/cancelled/otherwise unresolved is not evidence of a
-// clean pass either; !hasFailingChecks previously treated all of those as
-// clean. Read-only: unlike Execute and ReconcileApprovalGate, it never fixes,
-// reruns, or pushes anything, and it never blocks the approval itself - it
-// only decides how the resulting completion is recorded.
-func (s *CIStep) VerifyApprovalOverride(sctx *pipeline.StepContext) (string, error) {
+func (s *CIStep) VerifyApprovalOverride(sctx *pipeline.StepContext) (reason string, verifyErr error) {
+	requiredComplete := !requiresExternalReview(sctx)
+	defer func() {
+		if !requiredComplete {
+			if verifyErr != nil {
+				verifyErr = fmt.Errorf("%w: %w", pipeline.ErrApprovalBlocked, verifyErr)
+			} else {
+				verifyErr = fmt.Errorf("%w: %s", pipeline.ErrApprovalBlocked, reason)
+			}
+		}
+	}()
 	ctx := sctx.Ctx
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -248,6 +245,12 @@ func (s *CIStep) VerifyApprovalOverride(sctx *pipeline.StepContext) (string, err
 		}
 		return fmt.Sprintf("could not verify live CI state: %v", err), nil
 	}
+	for _, check := range checks {
+		if check.ExternalReview != "" && check.Bucket != scm.CheckBucketPass {
+			return fmt.Sprintf("%s is %s at the current PR head", check.Name, check.State), nil
+		}
+	}
+	requiredComplete = true
 	if allChecksPassed(checks) {
 		// A green head can still carry a green review bot's unresolved
 		// comments under ci.review_bot_comments: always; approving over

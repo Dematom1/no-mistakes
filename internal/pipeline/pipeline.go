@@ -11,6 +11,8 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
+var ErrApprovalBlocked = errors.New("approval blocked by required review")
+
 var ErrFatalGateReconciliation = errors.New("fatal gate reconciliation")
 
 // ErrDaemonShutdown is the cancellation cause RunManager.Shutdown gives every
@@ -245,27 +247,9 @@ type ApprovalGateResumer interface {
 	ResumeApprovalGate(sctx *StepContext, findingsJSON string) (action types.ApprovalAction, resume bool, err error)
 }
 
-// ApprovalOverrideVerifier is implemented by a step whose approval must not
-// erase the condition that caused its gate (currently: the CI step's live
-// failing checks, and the Test step's persisted failing commands.test result).
-// The executor calls it once, synchronously, when a human answers
-// ActionApprove - never for Skip, Abort, or Fix, which do not claim the step
-// passed. A human's approval always proceeds (this never blocks a deliberate
-// operator decision), but when the verifier returns a reason the executor
-// records the completion as an explicit override (StepResult.OverrideReason,
-// via db.SetStepOverrideReason) instead of making it indistinguishable from a
-// genuinely green completion. CI re-checks its live condition; Test reads the
-// command result persisted when its gate parked rather than re-running it.
-//
-// unresolved is a short human-readable reason (e.g. naming the still-failing
-// check or failed configured test command), and "" means the completion needs
-// no override marker. err is reserved for a verification failure distinct
-// from "still unresolved" (e.g.
-// the provider could not be reached); implementations should fail closed by
-// treating err as if it were an unresolved condition described by err, and
-// callers do the same rather than silently completing on error, but the
-// approval itself still proceeds either way - this interface only decides
-// how the completion is recorded, never whether it happens.
+// ApprovalOverrideVerifier records unresolved conditions on approval.
+// ErrApprovalBlocked refuses approval when a required review is incomplete;
+// other unresolved conditions are recorded as explicit overrides.
 type ApprovalOverrideVerifier interface {
 	VerifyApprovalOverride(sctx *StepContext) (unresolved string, err error)
 }
