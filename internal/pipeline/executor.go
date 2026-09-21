@@ -1884,7 +1884,8 @@ done:
 // ApprovalOverrideVerifier, this asks whether the completion needs an explicit
 // override (db.SetStepOverrideReason) instead of a silent plain pass. CI
 // re-checks its live condition; Test inspects the configured-command result
-// persisted when its gate parked.
+// persisted when its gate parked. ApprovalOverrideVerifier owns the error and
+// refusal contract.
 //
 // Persisting that override marker is itself fail-closed: downstream consumers
 // derive each step's override status from its durable override/approval reasons,

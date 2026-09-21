@@ -188,6 +188,10 @@ func (s *CIStep) ReconcileApprovalGate(sctx *pipeline.StepContext) (bool, error)
 	}
 }
 
+// VerifyApprovalOverride reads live checks without fixing or rerunning them.
+// Required reviews must be proven complete at the run's current head before
+// approval can use the ordinary CI override path. Any earlier return leaves
+// that proof absent, so the deferred guard refuses completion.
 func (s *CIStep) VerifyApprovalOverride(sctx *pipeline.StepContext) (reason string, verifyErr error) {
 	requiredComplete := !requiresExternalReview(sctx)
 	defer func() {
