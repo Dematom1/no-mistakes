@@ -790,7 +790,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	e.waiting = true
 	e.waitingStep = gate.step.Name()
 	e.waitingApprovalRefusal = approvalRefusal(gate.step.Name(), gate.findings)
-	e.waitingApprovalVerify = approvalVerifier(gate.step, reconcileCtx)
+	e.waitingApprovalVerify = e.approvalVerifier(gate.step, reconcileCtx)
 	e.waitingFindings = gate.findings
 	e.waitingStepResultID = gate.stepResult.ID
 	e.waitingRoundID = gate.lastRoundID
@@ -1666,7 +1666,7 @@ rounds:
 			e.waiting = true
 			e.waitingStep = stepName
 			e.waitingApprovalRefusal = approvalRefusal(stepName, effectiveFindings)
-			e.waitingApprovalVerify = approvalVerifier(step, sctx)
+			e.waitingApprovalVerify = e.approvalVerifier(step, sctx)
 			e.waitingFindings = effectiveFindings
 			e.waitingStepResultID = sr.ID
 			e.waitingRoundID = currentRoundID
@@ -1931,13 +1931,24 @@ func (e *Executor) applyApprovalOverride(step Step, stepResultID string, respons
 }
 
 // approvalVerifier binds step's ApprovalOverrideVerifier to the parked gate's
-// context, or returns nil when the step has none.
-func approvalVerifier(step Step, sctx *StepContext) func() (string, error) {
+// context, bounded by gateReconcileTimeout like the gate's other live reads, or
+// returns nil when the step has none.
+func (e *Executor) approvalVerifier(step Step, sctx *StepContext) func() (string, error) {
 	verifier, ok := step.(ApprovalOverrideVerifier)
 	if !ok {
 		return nil
 	}
-	return func() (string, error) { return verifier.VerifyApprovalOverride(sctx) }
+	return func() (string, error) {
+		timeout := e.gateReconcileTimeout
+		if timeout <= 0 {
+			timeout = defaultGateReconcileTimeout
+		}
+		verifyCtx, cancel := context.WithTimeout(sctx.Ctx, timeout)
+		defer cancel()
+		copyCtx := *sctx
+		copyCtx.Ctx = verifyCtx
+		return verifier.VerifyApprovalOverride(&copyCtx)
+	}
 }
 
 // persistResponseDecision writes the durable decision a fix response reports,

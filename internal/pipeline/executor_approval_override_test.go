@@ -440,3 +440,39 @@ func TestExecutor_ApprovalOverride_RequiredReviewRefusesApprovalAndKeepsTheGateP
 		}
 	}
 }
+
+func TestExecutor_ApprovalOverride_VerificationIsBoundedByTheGateReconcileTimeout(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	step := newOverrideVerifyingApprovalStep(types.StepCI, `{"summary":"Required review incomplete"}`, func(sctx *StepContext) (string, error) {
+		<-sctx.Ctx.Done()
+		return "", fmt.Errorf("%w: %w", ErrApprovalBlocked, sctx.Ctx.Err())
+	})
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+	exec.SetGateReconcileTimings(time.Hour, 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(ctx, run, repo, t.TempDir()) }()
+
+	waitForStepStatus(t, database, run.ID, step.Name(), types.StepStatusAwaitingApproval)
+	responded := make(chan error, 1)
+	go func() { responded <- exec.Respond(step.Name(), types.ActionApprove, nil) }()
+	select {
+	case err := <-responded:
+		var refusal *RespondRefusal
+		if !errors.As(err, &refusal) || !strings.Contains(refusal.Message, context.DeadlineExceeded.Error()) {
+			t.Fatalf("Respond(approve) = %v, want a refusal naming the verification deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("approval verification was not bounded by the gate reconcile timeout")
+	}
+	rows, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != types.StepStatusAwaitingApproval {
+		t.Fatalf("timed-out verification changed the gate: %+v", rows)
+	}
+	cancel()
+	<-done
+}
