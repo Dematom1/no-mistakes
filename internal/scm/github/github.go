@@ -1597,7 +1597,7 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 				if raw.Author == nil || !scm.IsReviewBotLogin(scm.ProviderGitHub, raw.Author.Login) {
 					continue
 				}
-				bot, _ := scm.ReviewBotForLogin(raw.Author.Login)
+				bot, _ := scm.ReviewBotForLogin(scm.ProviderGitHub, raw.Author.Login)
 				if bot.AuthorID != 0 && (h.host != "github.com" || raw.Author.ID != bot.AuthorID) {
 					continue
 				}

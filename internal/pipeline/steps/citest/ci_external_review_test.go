@@ -144,7 +144,7 @@ func TestCIStep_RequiredReviewGitLabIsExplicitlyUnsupported(t *testing.T) {
 	dir, base, head := stepstest.SetupGitRepo(t)
 	sctx := stepstest.NewTestContextWithDBRecords(t, nil, dir, base, head, config.Commands{})
 	sctx.Repo.UpstreamURL = "https://gitlab.com/test/repo.git"
-	sctx.Env = stepstest.FakeCIGlab(t, "opened", `[{"name":"build","status":"success"}]`)
+	sctx.Env = stepstest.FakeCIGlab(t, "opened", `[{"name":"build","status":"success"}]`, head)
 	sctx.Config.CI.RequiredReviews = []string{"coderabbit"}
 	url := "https://gitlab.com/test/repo/-/merge_requests/42"
 	sctx.Run.PRURL = &url
