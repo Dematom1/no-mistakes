@@ -236,8 +236,6 @@ func (c Check) Failing() bool { return c.Bucket == CheckBucketFail }
 // review comments, instead of spending an auto-fix round on it, and the
 // GitHub backend collects only these bots' review-thread comments.
 type ReviewBot struct {
-	// Name is the optional completion requirement's configuration name.
-	Name string
 	// AppID and AuthorID pin the GitHub.com identities when nonzero. Legacy
 	// providers keep their existing slug/login matching contract.
 	AppID    int64
@@ -260,23 +258,7 @@ const CodeRabbitAuthorID int64 = 136622811
 // bot is one entry here.
 var ReviewBots = []ReviewBot{
 	{AppSlug: "greptile-apps", Logins: []string{"greptile-apps[bot]", "greptile-apps"}, GitLabLogins: []string{"greptileai"}},
-	{Name: "coderabbit", AppSlug: "coderabbitai", AppID: CodeRabbitAppID, AuthorID: CodeRabbitAuthorID, Logins: []string{"coderabbitai", "coderabbitai[bot]"}},
-}
-
-// ReviewBotForApp returns the registered review bot that publishes checks
-// under slug. An empty slug never matches: a provider that reported no app
-// identity has not identified a bot.
-func ReviewBotForApp(slug string) (ReviewBot, bool) {
-	slug = strings.ToLower(strings.TrimSpace(slug))
-	if slug == "" {
-		return ReviewBot{}, false
-	}
-	for _, bot := range ReviewBots {
-		if strings.EqualFold(bot.AppSlug, slug) {
-			return bot, true
-		}
-	}
-	return ReviewBot{}, false
+	{AppSlug: "coderabbitai", AppID: CodeRabbitAppID, AuthorID: CodeRabbitAuthorID, Logins: []string{"coderabbitai", "coderabbitai[bot]"}},
 }
 
 // ReviewBotForCheck authenticates a registered bot's check publisher. CodeRabbit

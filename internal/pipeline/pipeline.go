@@ -249,15 +249,16 @@ type ApprovalGateResumer interface {
 
 // ApprovalOverrideVerifier preserves unresolved conditions when ActionApprove
 // completes a step. CI reads live checks; Test reads persisted command evidence.
-// The executor calls it on live approval and recovery, not Skip, Abort, or Fix.
-// An empty reason means no override is needed. A nonempty reason or an ordinary
-// verification error is recorded as an explicit override before approval can
-// complete; failure to persist that evidence fails the run closed.
+// The executor calls it when an approve response arrives at a parked gate (live
+// or recovered), not for Skip, Abort, or Fix. An empty reason means no override
+// is needed. A nonempty reason or an ordinary verification error is recorded as
+// an explicit override before approval can complete; failure to persist that
+// evidence fails the run closed.
 //
-// An error wrapping ErrApprovalBlocked instead refuses completion and fails the
-// run without recording an override. CI uses this when a required external
-// review is incomplete or cannot be verified. Steps without this interface are
-// unaffected.
+// An error wrapping ErrApprovalBlocked instead refuses the approve response:
+// the gate stays parked and nothing is recorded. CI uses this when a required
+// external review is incomplete or cannot be verified. Steps without this
+// interface are unaffected.
 type ApprovalOverrideVerifier interface {
 	VerifyApprovalOverride(sctx *StepContext) (unresolved string, err error)
 }

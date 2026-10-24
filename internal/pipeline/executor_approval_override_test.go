@@ -323,85 +323,120 @@ func TestExecutor_ApprovalOverride_RunCompletedEventCarriesReason(t *testing.T) 
 	}
 }
 
-func TestExecutor_ApprovalOverride_RequiredReviewBlocksCompletion(t *testing.T) {
-	for _, recovered := range []bool{false, true} {
-		t.Run(fmt.Sprintf("recovered=%t", recovered), func(t *testing.T) {
-			database, p, run, repo := setupTest(t)
-			findings := `{"summary":"Required review incomplete"}`
-			step := newOverrideVerifyingApprovalStep(types.StepCI, findings, func(*StepContext) (string, error) {
-				return "", fmt.Errorf("%w: review rate limited", ErrApprovalBlocked)
-			})
-			if recovered {
-				if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
-					t.Fatal(err)
-				}
-				sr, err := database.InsertStepResult(run.ID, types.StepCI)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := database.StartStep(sr.ID); err != nil {
-					t.Fatal(err)
-				}
-				if err := database.SetStepFindings(sr.ID, findings); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := database.InsertStepRound(sr.ID, 1, "initial", &findings, nil, 10); err != nil {
-					t.Fatal(err)
-				}
-				if err := database.UpdateStepStatusWithDuration(sr.ID, types.StepStatusAwaitingApproval, 10); err != nil {
-					t.Fatal(err)
-				}
-				if err := database.SetRunAwaitingAgent(run.ID); err != nil {
-					t.Fatal(err)
-				}
-				run, err = database.GetRun(run.ID)
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-			done := make(chan error, 1)
-			dir := t.TempDir()
-			go func() {
+func TestExecutor_ApprovalOverride_RequiredReviewRefusesApprovalAndKeepsTheGateParked(t *testing.T) {
+	for _, blocked := range []string{"review rate limited", "could not verify live CI state: gh: connection reset"} {
+		for _, recovered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/recovered=%t", blocked, recovered), func(t *testing.T) {
+				database, p, run, repo := setupTest(t)
+				findings := `{"summary":"Required review incomplete"}`
+				var mu sync.Mutex
+				complete := false
+				step := newOverrideVerifyingApprovalStep(types.StepCI, findings, func(*StepContext) (string, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					if complete {
+						return "", nil
+					}
+					return "", fmt.Errorf("%w: %s", ErrApprovalBlocked, blocked)
+				})
 				if recovered {
-					done <- exec.Resume(context.Background(), run, repo, dir)
-				} else {
-					done <- exec.Execute(context.Background(), run, repo, dir)
+					if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+						t.Fatal(err)
+					}
+					sr, err := database.InsertStepResult(run.ID, types.StepCI)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := database.StartStep(sr.ID); err != nil {
+						t.Fatal(err)
+					}
+					if err := database.SetStepFindings(sr.ID, findings); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := database.InsertStepRound(sr.ID, 1, "initial", &findings, nil, 10); err != nil {
+						t.Fatal(err)
+					}
+					if err := database.UpdateStepStatusWithDuration(sr.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+						t.Fatal(err)
+					}
+					if err := database.SetRunAwaitingAgent(run.ID); err != nil {
+						t.Fatal(err)
+					}
+					run, err = database.GetRun(run.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
 				}
-			}()
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				err := exec.Respond(types.StepCI, types.ActionApprove, nil)
-				if err == nil {
-					break
+				exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+				done := make(chan error, 1)
+				dir := t.TempDir()
+				go func() {
+					if recovered {
+						done <- exec.Resume(context.Background(), run, repo, dir)
+					} else {
+						done <- exec.Execute(context.Background(), run, repo, dir)
+					}
+				}()
+				deadline := time.Now().Add(5 * time.Second)
+				var refusal *RespondRefusal
+				for {
+					err := exec.Respond(types.StepCI, types.ActionApprove, nil)
+					if errors.As(err, &refusal) {
+						break
+					}
+					if err == nil {
+						t.Fatal("approval over an incomplete required review was accepted")
+					}
+					if time.Now().After(deadline) {
+						t.Fatal(err)
+					}
+					time.Sleep(20 * time.Millisecond)
 				}
-				if time.Now().After(deadline) {
+				if !strings.Contains(refusal.Message, blocked) {
+					t.Fatalf("refusal = %q, want it to name %q", refusal.Message, blocked)
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("refused approval ended the run: %v", err)
+				case <-time.After(100 * time.Millisecond):
+				}
+				got, err := database.GetRun(run.ID)
+				if err != nil {
 					t.Fatal(err)
 				}
-				time.Sleep(20 * time.Millisecond)
-			}
-			select {
-			case err := <-done:
-				if !errors.Is(err, ErrApprovalBlocked) {
-					t.Fatalf("execution error=%v", err)
+				if got.Status == types.RunFailed {
+					t.Fatalf("run status=%s, want the run kept alive", got.Status)
 				}
-			case <-time.After(5 * time.Second):
-				t.Fatal("approval did not settle")
-			}
-			got, err := database.GetRun(run.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Status != types.RunFailed {
-				t.Fatalf("run status=%s", got.Status)
-			}
-			rows, err := database.GetStepsByRun(run.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(rows) != 1 || rows[0].Status == types.StepStatusCompleted || rows[0].OverrideReason != nil {
-				t.Fatalf("blocked approval completed or recorded override: %+v", rows)
-			}
-		})
+				rows, err := database.GetStepsByRun(run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(rows) != 1 || rows[0].Status != types.StepStatusAwaitingApproval || rows[0].OverrideReason != nil {
+					t.Fatalf("refused approval changed the gate: %+v", rows)
+				}
+
+				mu.Lock()
+				complete = true
+				mu.Unlock()
+				if err := exec.Respond(types.StepCI, types.ActionApprove, nil); err != nil {
+					t.Fatalf("approval after the review completed: %v", err)
+				}
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatalf("execution error=%v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("approval did not settle")
+				}
+				rows, err = database.GetStepsByRun(run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(rows) != 1 || rows[0].Status != types.StepStatusCompleted || rows[0].OverrideReason != nil {
+					t.Fatalf("approved step = %+v, want a completed step with no override", rows)
+				}
+			})
+		}
 	}
 }

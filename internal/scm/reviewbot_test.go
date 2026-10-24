@@ -8,7 +8,7 @@ import "testing"
 // to a decision without the comments that explain it.
 func TestReviewBotRegistry_ResolvesAppAndLoginToTheSameBot(t *testing.T) {
 	t.Parallel()
-	byApp, ok := ReviewBotForApp("greptile-apps")
+	byApp, ok := ReviewBotForCheck(Check{App: "greptile-apps"})
 	if !ok {
 		t.Fatal("greptile-apps must be a registered review bot app")
 	}
@@ -22,8 +22,8 @@ func TestReviewBotRegistry_ResolvesAppAndLoginToTheSameBot(t *testing.T) {
 		}
 	}
 	for _, slug := range []string{"", "github-actions", "codecov"} {
-		if _, ok := ReviewBotForApp(slug); ok {
-			t.Fatalf("ReviewBotForApp(%q) matched a bot; an unknown or empty app identity must never be a review bot", slug)
+		if _, ok := ReviewBotForCheck(Check{App: slug}); ok {
+			t.Fatalf("ReviewBotForCheck(%q) matched a bot; an unknown or empty app identity must never be a review bot", slug)
 		}
 	}
 	if IsReviewBotLogin(ProviderGitHub, "octocat") {
@@ -72,7 +72,7 @@ func TestCodeRabbitRegistryRequiresImmutableGitHubIdentity(t *testing.T) {
 		}
 	}
 	bot, ok := ReviewBotForLogin(ProviderGitHub, "coderabbitai[bot]")
-	if !ok || bot.Name != "coderabbit" || bot.AuthorID != 136622811 || bot.AppID != 347564 {
+	if !ok || bot.AppSlug != "coderabbitai" || bot.AuthorID != 136622811 || bot.AppID != 347564 {
 		t.Fatalf("CodeRabbit registry = %+v, %v", bot, ok)
 	}
 	if bot, ok := ReviewBotForLogin(ProviderGitHub, "coderabbitai"); !ok || bot.AuthorID != CodeRabbitAuthorID {

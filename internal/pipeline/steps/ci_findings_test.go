@@ -179,7 +179,7 @@ func TestCIObservationFindings_PreservesSameNamedCheckIdentityAndClassification(
 func TestReviewBotFindings_BoundsAndEmptyCase(t *testing.T) {
 	t.Parallel()
 	check := scm.Check{Name: "Greptile Review", Bucket: scm.CheckBucketFail, App: "greptile-apps", Link: "https://greptile.com/"}
-	bot, _ := scm.ReviewBotForApp(check.App)
+	bot, _ := scm.ReviewBotForCheck(check)
 
 	empty := reviewBotFindings(scm.ProviderGitHub, []reviewBotCheck{{check: check, bot: bot}}, nil)
 	if len(empty) != 1 || empty[0].Action != types.ActionAskUser || empty[0].Check != check.Name || !strings.Contains(empty[0].Description, "no unresolved review comments") {
@@ -212,7 +212,7 @@ func TestReviewBotFindings_BoundsAndEmptyCase(t *testing.T) {
 
 func TestReviewBotFindings_BoundsEntireObservationAcrossRepeatedChecks(t *testing.T) {
 	t.Parallel()
-	bot, _ := scm.ReviewBotForApp("greptile-apps")
+	bot, _ := scm.ReviewBotForCheck(scm.Check{App: "greptile-apps"})
 	checks := make([]reviewBotCheck, 100)
 	for i := range checks {
 		checks[i] = reviewBotCheck{check: scm.Check{Name: "Greptile Review", ProviderID: fmt.Sprintf("github-check-run:%d", i+1)}, bot: bot}

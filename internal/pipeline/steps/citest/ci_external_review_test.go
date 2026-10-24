@@ -98,7 +98,7 @@ func TestCIStep_RequiredReviewApprovalCannotHideIncompleteReview(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, status, conclusion, title, comments string
-		malformed, stale, allow                   bool
+		malformed, transient, stale, allow        bool
 	}{
 		{name: "missing", status: "missing"},
 		{name: "pending", status: "in_progress"},
@@ -107,6 +107,7 @@ func TestCIStep_RequiredReviewApprovalCannotHideIncompleteReview(t *testing.T) {
 		{name: "timed out", status: "completed", conclusion: "timed_out"},
 		{name: "rate limited", status: "completed", conclusion: "success", title: "Review rate limited"},
 		{name: "unreadable", malformed: true},
+		{name: "transient read error", transient: true},
 		{name: "wrong head", status: "completed", conclusion: "success", stale: true},
 		{name: "unresolved findings", status: "completed", conclusion: "success", comments: `[{"author":"coderabbitai","author_id":136622811,"body":"Fix error handling","path":"main.go","line":7}]`},
 		{name: "complete with unrelated failure", status: "completed", conclusion: "success", allow: true},
@@ -122,6 +123,9 @@ func TestCIStep_RequiredReviewApprovalCannotHideIncompleteReview(t *testing.T) {
 			payload := externalReviewPayload(reviewHead, tc.status, tc.conclusion, tc.title)
 			if tc.malformed {
 				payload = "invalid json"
+			}
+			if tc.transient {
+				payload = ""
 			}
 			sctx.Env = append(stepstest.FakeCIGH(t, "OPEN", `[{"name":"build","state":"FAILURE","bucket":"fail"}]`), "FAKE_CLI_PR_HEAD_SHA="+head, "FAKE_CLI_EXTERNAL_REVIEWS="+payload, "FAKE_CLI_REVIEW_COMMENTS="+tc.comments)
 			sctx.Config.CI.RequiredReviews = []string{"coderabbit"}
