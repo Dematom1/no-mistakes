@@ -878,7 +878,7 @@ With no trusted copy of this file, the operator's global value applies, then the
 
 ### ci.review_bot_comments
 
-When the CI step reads a supported review bot's (currently Greptile's) unresolved review comments.
+When the CI step reads a supported review bot's unresolved review comments. See the [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) for supported bots and identity verification.
 
 | | |
 |---|---|
@@ -891,18 +891,18 @@ ci:
   review_bot_comments: always
 ```
 
-- **`on_failure` (default)** reads them only when the bot's own check failed. A green bot check is green, whatever comments it left. This is the behavior before the key existed.
+- **`on_failure` (default)** reads them only when the bot's own check failed. A green bot check stays green unless a separate [`ci.required_reviews`](#cirequired_reviews) requirement applies.
 - **`always`** also reads them when the bot's check completed green on the current head, or has not registered on it yet once every other check is green, since the bot's threads from an earlier head can still be unresolved. Each unresolved comment becomes the same `ask-user` finding a red bot check produces, anchored to the comment's file and line, so the step parks for a decision instead of reporting `checks-passed`. A green bot with nothing unresolved is still green.
 
 A review bot can conclude its check `success` while leaving an unresolved comment. The comment most likely to be missed that way is the one on the pipeline's own CI repair commit, which no human has reviewed yet.
 
-Where the comments come from, and how the bot is identified, is provider-specific. On GitHub they are the bot's unresolved review-thread comments, and the bot is identified by the check suite's app slug. On GitLab they are the merge request's unresolved discussion notes, and the bot is identified by the login it comments as (Greptile posts there as `greptileai`); a GitLab job names no publishing application, so no GitLab check can be attributed to a bot.
+The [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns provider-specific comment sources, bot identity verification, and prompt-safety handling.
 
 Under `always`:
 
 - Comments are read only once every check on the current head has completed green, the bot's included when it has registered one, so a review still being posted is not raced. A bot that has not registered a check on the head yet has its comments read too, since its threads from an earlier head can still be unresolved. A head with no checks at all under trusted [`no_ci: true`](#no_ci) has them read the same way before it is reported ready. Only unresolved threads count, and the same per-gate bound applies as for a red check. A GitLab note counts only when it is resolvable, unresolved, not a system note, and authored by a registered bot, so an ordinary merge request comment is never a finding.
-- The findings never spend an `auto_fix.ci` attempt. A human decides: approve, skip, or select comments for a fix round.
-- Approving over them records the CI step as passed with an override naming the comments, never as a clean pass.
+- The findings never spend an `auto_fix.ci` attempt. A human can select comments for a fix round or skip; approval is subject to [`ci.required_reviews`](#cirequired_reviews).
+- When approval is allowed, approving over comments records the CI step as passed with an override naming the comments, never as a clean pass.
 - A comment list that cannot be read is not treated as empty: `checks-passed` is withheld, and a read that keeps failing parks for a decision.
 - Each green poll costs one more provider read for the comments.
 
