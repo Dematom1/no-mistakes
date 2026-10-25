@@ -273,6 +273,7 @@ type GlobalConfig struct {
 	// value still wins over it.
 	Rebase RebaseRaw
 	Commit GlobalCommitRaw
+	PR     GlobalPRRaw
 	Intent GlobalIntentRaw
 	Test   TestRaw
 	// Review carries the operator's own review guidance for every gated
@@ -324,6 +325,7 @@ type globalConfigRaw struct {
 	CI                        CIRaw                      `yaml:"ci"`
 	Rebase                    RebaseRaw                  `yaml:"rebase"`
 	Commit                    GlobalCommitRaw            `yaml:"commit"`
+	PR                        GlobalPRRaw                `yaml:"pr"`
 	Intent                    GlobalIntentRaw            `yaml:"intent"`
 	Test                      TestRaw                    `yaml:"test"`
 	Review                    OperatorReviewRaw          `yaml:"review"`
@@ -372,6 +374,12 @@ type RepositoryOverride struct {
 // one parks the gate for a human and stays the repository's decision.
 type OperatorReviewRaw struct {
 	PathInstructions []PathInstruction `yaml:"path_instructions"`
+}
+
+// GlobalPRRaw contains machine-wide PR presentation defaults.
+// Template and PublishIntent are deliberately not machine-wide settings.
+type GlobalPRRaw struct {
+	Appendix string `yaml:"appendix"`
 }
 
 // RepositoryPRRaw contains machine-local per-repository PR defaults.
@@ -518,9 +526,9 @@ type PRRaw struct {
 	// repository explicitly opts into pushed-branch settings with
 	// allow_repo_commands.
 	BaseBranch string `yaml:"base_branch"`
-	// Template, PublishIntent, and Appendix are repository-only publication
-	// policy. All three remain trusted-only even when allow_repo_commands is
-	// enabled. Appendix empty means full.
+	// Template, PublishIntent, and Appendix remain trusted-only even when
+	// allow_repo_commands is enabled. An empty Appendix inherits machine-local
+	// defaults, falling back to full.
 	Template      string `yaml:"template"`
 	PublishIntent *bool  `yaml:"publish_intent"`
 	Appendix      string `yaml:"appendix"`
@@ -1193,9 +1201,9 @@ type EvidenceRaw struct {
 	StoreInRepo *bool `yaml:"store_in_repo"`
 	// AttachMedia uploads image and video evidence to GitHub user-attachments
 	// when the PR body is rendered. It defaults on so default-config PRs stop
-	// citing local disk paths for screenshots; set false to opt out. The
-	// orphan-branch store (store_in_repo) is independent: when both are on,
-	// the PR body carries both the commit-pinned link and the attachment.
+	// citing local disk paths for screenshots; set false to opt out even when
+	// store_in_repo is true. The orphan-branch store is independent: when both
+	// are on, the PR body carries both the commit-pinned link and the attachment.
 	// Like store_in_repo, this is pushed-readable.
 	AttachMedia *bool   `yaml:"attach_media"`
 	Dir         *string `yaml:"dir"`
@@ -1803,12 +1811,12 @@ intent:
 # reviewers can open them; text artifacts stay inlined. Uploads need the raw
 # GitHub token from "gh auth token", read once per PR render; if your gh sits
 # behind a credential vault that prompts before it releases the token, set
-# attach_media and store_in_repo to false so the PR step never asks. Opt in to
-# store_in_repo to also publish the full directory to an orphan evidence branch
-# in the same repository and link it from the PR body. The evidence branch
-# shares no history with your code branches, so artifacts never enter the
-# pushed branch or the default branch. When both are on, the PR body carries
-# both the attachment and the commit-pinned link.
+# attach_media to false so the PR step never asks, even with store_in_repo on.
+# Opt in to store_in_repo to also publish the full directory to an orphan
+# evidence branch in the same repository and link it from the PR body. The
+# evidence branch shares no history with your code branches, so artifacts never
+# enter the pushed branch or the default branch. When both are on, the PR body
+# carries both the attachment and the commit-pinned link.
 #
 # no-mistakes reaps its own evidence rather than leaving that to an OS temp
 # directory timer: retention ages run directories out (default 14 days) and
@@ -2707,6 +2715,9 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	if !repoOnly.AutoFix.Gates.IsZero() {
 		return nil, fmt.Errorf("auto_fix.gates is repository-only; configure it on the trusted default branch")
 	}
+	if err := validatePRAppendix(raw.PR.Appendix); err != nil {
+		return nil, fmt.Errorf("parse global config: %w", err)
+	}
 	if err := validateGlobalCommitRaw(raw.Commit); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
@@ -2927,6 +2938,7 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	cfg.CI = raw.CI
 	cfg.Rebase = raw.Rebase
 	cfg.Commit = raw.Commit
+	cfg.PR = raw.PR
 	cfg.Intent = raw.Intent
 	cfg.Test = raw.Test
 	cfg.Providers = raw.Providers
@@ -4033,6 +4045,9 @@ func merge(global *GlobalConfig, repo *RepoConfig, override *RepositoryOverride)
 		if pr.Appendix == "" {
 			pr.Appendix = override.PR.Appendix
 		}
+	}
+	if pr.Appendix == "" {
+		pr.Appendix = global.PR.Appendix
 	}
 	if repo.PR.TitleFormat != nil {
 		pr.TitleFormat = *repo.PR.TitleFormat
