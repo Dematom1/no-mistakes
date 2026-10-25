@@ -268,7 +268,8 @@ func reviewBotFindings(provider scm.Provider, checks []reviewBotCheck, comments 
 				Description: fmt.Sprintf("%s: %s", strings.TrimSpace(comment.Author), body),
 			})
 		}
-		if matched || checked.green {
+		incompleteReview := checked.check.ExternalReview != "" && checked.check.State != "UNRESOLVED_FINDINGS"
+		if checked.green || matched && !incompleteReview {
 			continue
 		}
 		description := fmt.Sprintf("Review bot check failing: %s", checked.check.Name)
@@ -278,14 +279,13 @@ func reviewBotFindings(provider scm.Provider, checks []reviewBotCheck, comments 
 		if link := strings.TrimSpace(checked.check.Link); link != "" {
 			description += " - " + link
 		}
-		if hasComments {
+		switch {
+		case checked.check.ExternalReview != "":
+			description += " - review completion or resolution is still required"
+		case hasComments:
 			description += " - its unresolved comments are represented by another failed check from the same app"
-		} else {
-			if checked.check.ExternalReview != "" {
-				description += " - review completion or resolution is still required"
-			} else {
-				description += " - no unresolved review comments were found, so decide whether to proceed"
-			}
+		default:
+			description += " - no unresolved review comments were found, so decide whether to proceed"
 		}
 		candidates = append(candidates, Finding{
 			Severity:    types.FindingSeverityWarning,

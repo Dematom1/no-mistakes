@@ -628,3 +628,37 @@ func TestReviewBotFindingsKeepProviderIdentity(t *testing.T) {
 		}
 	}
 }
+
+// A required external review that is not complete at the head must name its
+// completion state even when stale unresolved comments from the same bot
+// already fill the gate.
+func TestReviewBotFindings_IncompleteExternalReviewSurvivesStaleComments(t *testing.T) {
+	t.Parallel()
+	comments := []scm.ReviewComment{
+		{ID: "old-1", Author: "coderabbitai[bot]", AuthorID: scm.CodeRabbitAuthorID, Path: "a.go", Line: 1, Body: "stale"},
+	}
+	for _, state := range []string{"RATE_LIMITED", "INCOMPLETE", "PENDING", "UNRESOLVED_FINDINGS"} {
+		check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", AppID: scm.CodeRabbitAppID, AppHost: "github.com", Bucket: scm.CheckBucketFail, State: state}
+		bot, ok := scm.ReviewBotForCheck(check)
+		if !ok {
+			t.Fatal("synthetic CodeRabbit check did not resolve to the CodeRabbit bot")
+		}
+		findings := reviewBotFindings(scm.ProviderGitHub, []reviewBotCheck{{check: check, bot: bot}}, comments)
+		named := false
+		for _, finding := range findings {
+			if strings.Contains(finding.Description, "Required external review coderabbit is "+state) {
+				named = true
+			}
+		}
+		if wantNamed := state != "UNRESOLVED_FINDINGS"; named != wantNamed || len(findings) != 1+boolToInt(wantNamed) {
+			t.Fatalf("state %s findings = %+v, want the stale comment plus a completion-state finding: %v", state, findings, wantNamed)
+		}
+	}
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
