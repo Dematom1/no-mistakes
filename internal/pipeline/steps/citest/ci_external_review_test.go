@@ -265,7 +265,9 @@ func TestCIStep_CodeRabbitNormalizesUnresolvedFindingsLikeGreptile(t *testing.T)
 			dir, base, head := stepstest.SetupGitRepo(t)
 			sctx := stepstest.NewTestContextWithDBRecords(t, nil, dir, base, head, config.Commands{})
 			// CodeRabbit can finish successfully while posting findings. Opt-in must
-			// surface those too; its native failed checks also use the shared adapter.
+			// surface those; without it an installed CodeRabbit's red check is an
+			// ordinary CI check and its comments are ignored, as before CodeRabbit
+			// support existed.
 			checks := `[{"id":101,"name":"CodeRabbit","state":"FAILURE","bucket":"fail","app":"coderabbitai","app_id":347564}]`
 			if required {
 				checks = `[{"id":101,"name":"CodeRabbit","state":"SUCCESS","bucket":"pass","app":"coderabbitai","app_id":347564}]`
@@ -282,12 +284,18 @@ func TestCIStep_CodeRabbitNormalizesUnresolvedFindingsLikeGreptile(t *testing.T)
 			sctx.Run.PRURL = &url
 			step := (&steps.CIStep{}).SetBaseBranchTip(func(context.Context) (string, bool) { return base, true })
 			outcome, err := step.Execute(sctx)
-			if err != nil || outcome == nil || !outcome.NeedsApproval || outcome.AutoFixable {
+			if err != nil || outcome == nil || !outcome.NeedsApproval || outcome.AutoFixable != !required {
 				t.Fatalf("outcome=%+v err=%v", outcome, err)
 			}
 			findings, err := types.ParseFindingsJSON(outcome.Findings)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if !required {
+				if len(findings.Items) != 1 || findings.Items[0].Category != types.FindingCategoryCICheck || findings.Items[0].Action != types.ActionAutoFix || findings.Items[0].Check != "CodeRabbit" {
+					t.Fatalf("unconfigured CodeRabbit findings=%+v, want only the ordinary failing check", findings)
+				}
+				return
 			}
 			if len(findings.Items) != 1 {
 				t.Fatalf("findings=%+v", findings)

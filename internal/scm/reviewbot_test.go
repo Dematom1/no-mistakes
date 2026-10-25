@@ -8,7 +8,7 @@ import "testing"
 // to a decision without the comments that explain it.
 func TestReviewBotRegistry_ResolvesAppAndLoginToTheSameBot(t *testing.T) {
 	t.Parallel()
-	byApp, ok := ReviewBotForCheck(Check{App: "greptile-apps"})
+	byApp, ok := ReviewBotForCheck(ReviewBotsFor(nil), Check{App: "greptile-apps"})
 	if !ok {
 		t.Fatal("greptile-apps must be a registered review bot app")
 	}
@@ -22,7 +22,7 @@ func TestReviewBotRegistry_ResolvesAppAndLoginToTheSameBot(t *testing.T) {
 		}
 	}
 	for _, slug := range []string{"", "github-actions", "codecov"} {
-		if _, ok := ReviewBotForCheck(Check{App: slug}); ok {
+		if _, ok := ReviewBotForCheck(ReviewBotsFor(nil), Check{App: slug}); ok {
 			t.Fatalf("ReviewBotForCheck(%q) matched a bot; an unknown or empty app identity must never be a review bot", slug)
 		}
 	}
@@ -66,10 +66,13 @@ func TestCodeRabbitRegistryRequiresImmutableGitHubIdentity(t *testing.T) {
 		{Check{AppID: CodeRabbitAppID, AppHost: "github.com"}, true},
 		{Check{App: "greptile-apps"}, true},
 	} {
-		_, ok := ReviewBotForCheck(tc.check)
+		_, ok := ReviewBotForCheck(ReviewBotsFor([]string{"coderabbit"}), tc.check)
 		if ok != tc.want {
 			t.Fatalf("check=%+v matched=%v want=%v", tc.check, ok, tc.want)
 		}
+	}
+	if _, ok := ReviewBotForCheck(ReviewBotsFor(nil), Check{AppID: CodeRabbitAppID, AppHost: "github.com"}); ok {
+		t.Fatal("CodeRabbit must not be a review bot unless ci.required_reviews opts in")
 	}
 	bot, ok := ReviewBotForLogin(ProviderGitHub, "coderabbitai[bot]")
 	if !ok || bot.AppSlug != "coderabbitai" || bot.AuthorID != 136622811 || bot.AppID != 347564 {

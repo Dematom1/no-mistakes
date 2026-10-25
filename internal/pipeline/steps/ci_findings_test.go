@@ -179,7 +179,7 @@ func TestCIObservationFindings_PreservesSameNamedCheckIdentityAndClassification(
 func TestReviewBotFindings_BoundsAndEmptyCase(t *testing.T) {
 	t.Parallel()
 	check := scm.Check{Name: "Greptile Review", Bucket: scm.CheckBucketFail, App: "greptile-apps", Link: "https://greptile.com/"}
-	bot, _ := scm.ReviewBotForCheck(check)
+	bot, _ := scm.ReviewBotForCheck(scm.ReviewBotsFor(nil), check)
 
 	empty := reviewBotFindings(scm.ProviderGitHub, []reviewBotCheck{{check: check, bot: bot}}, nil)
 	if len(empty) != 1 || empty[0].Action != types.ActionAskUser || empty[0].Check != check.Name || !strings.Contains(empty[0].Description, "no unresolved review comments") {
@@ -212,7 +212,7 @@ func TestReviewBotFindings_BoundsAndEmptyCase(t *testing.T) {
 
 func TestReviewBotFindings_BoundsEntireObservationAcrossRepeatedChecks(t *testing.T) {
 	t.Parallel()
-	bot, _ := scm.ReviewBotForCheck(scm.Check{App: "greptile-apps"})
+	bot, _ := scm.ReviewBotForCheck(scm.ReviewBotsFor(nil), scm.Check{App: "greptile-apps"})
 	checks := make([]reviewBotCheck, 100)
 	for i := range checks {
 		checks[i] = reviewBotCheck{check: scm.Check{Name: "Greptile Review", ProviderID: fmt.Sprintf("github-check-run:%d", i+1)}, bot: bot}
@@ -639,7 +639,7 @@ func TestReviewBotFindings_IncompleteExternalReviewSurvivesStaleComments(t *test
 	}
 	for _, state := range []string{"RATE_LIMITED", "INCOMPLETE", "PENDING", "UNRESOLVED_FINDINGS"} {
 		check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", AppID: scm.CodeRabbitAppID, AppHost: "github.com", Bucket: scm.CheckBucketFail, State: state}
-		bot, ok := scm.ReviewBotForCheck(check)
+		bot, ok := scm.ReviewBotForCheck(scm.ReviewBotsFor([]string{"coderabbit"}), check)
 		if !ok {
 			t.Fatal("synthetic CodeRabbit check did not resolve to the CodeRabbit bot")
 		}
@@ -661,4 +661,57 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// CodeRabbit is a review bot only when trusted ci.required_reviews opts in.
+// Without it, an installed CodeRabbit's red check is an ordinary failing
+// check and its unresolved threads are not findings, exactly as before
+// CodeRabbit support existed; Greptile is unaffected either way.
+func TestCIObservationFindings_CodeRabbitIsRecognizedOnlyWhenOptedIn(t *testing.T) {
+	t.Parallel()
+	comments := []scm.ReviewComment{
+		{ID: "1", Author: "coderabbitai[bot]", AuthorID: scm.CodeRabbitAuthorID, Path: "a.go", Line: 3, Body: "nit"},
+		{ID: "2", Author: "greptile-apps[bot]", Path: "b.go", Line: 4, Body: "off by one"},
+	}
+	red := scm.Check{Name: "CodeRabbit", ProviderID: "github-check-run:7", Bucket: scm.CheckBucketFail, State: "FAILURE", App: "coderabbitai", AppID: scm.CodeRabbitAppID, AppHost: "github.com"}
+	greenGreptile := scm.Check{Name: "Greptile Review", Bucket: scm.CheckBucketPass, State: "SUCCESS", App: "greptile-apps"}
+
+	unconfigured := ciObservationFindings(ciIssues{
+		provider:    scm.ProviderGitHub,
+		checks:      []scm.Check{red, greenGreptile},
+		failing:     []string{"CodeRabbit"},
+		reruns:      func(string) int { return 0 },
+		botComments: comments,
+		greenBots:   true,
+	})
+	if len(unconfigured.Items) != 2 {
+		t.Fatalf("unconfigured findings = %+v, want the ordinary CodeRabbit check and the Greptile comment", unconfigured.Items)
+	}
+	if got := unconfigured.Items[0]; got.Category != types.FindingCategoryCICheck || got.Action != types.ActionAutoFix || got.Check != "CodeRabbit" {
+		t.Fatalf("CodeRabbit finding = %+v, want an ordinary auto-fix CI check", got)
+	}
+	if got := unconfigured.Items[1]; got.Category != types.FindingCategoryCIReviewBot || got.File != "b.go" {
+		t.Fatalf("bot finding = %+v, want only the Greptile comment", got)
+	}
+
+	synthetic := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", AppID: scm.CodeRabbitAppID, AppHost: "github.com", Bucket: scm.CheckBucketFail, State: "UNRESOLVED_FINDINGS"}
+	optedIn := ciObservationFindings(ciIssues{
+		provider:        scm.ProviderGitHub,
+		requiredReviews: []string{"coderabbit"},
+		checks:          []scm.Check{synthetic, greenGreptile},
+		failing:         []string{synthetic.Name},
+		reruns:          func(string) int { return 0 },
+		botComments:     comments,
+		greenBots:       true,
+	})
+	var files []string
+	for _, item := range optedIn.Items {
+		if item.Category != types.FindingCategoryCIReviewBot || item.Action != types.ActionAskUser {
+			t.Fatalf("opted-in finding = %+v, want only ask-user review-bot findings", item)
+		}
+		files = append(files, item.File)
+	}
+	if strings.Join(files, ",") != "a.go,b.go" {
+		t.Fatalf("opted-in findings anchor %v, want the CodeRabbit and Greptile comments", files)
+	}
 }

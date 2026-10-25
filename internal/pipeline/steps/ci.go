@@ -522,7 +522,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 			outcome = ciMonitoringTimeoutOutcome()
 		}
 		if len(timeoutExternalReviews) > 0 {
-			external := ciObservationFindings(ciIssues{checks: timeoutExternalReviews, failing: failingCheckNames(timeoutExternalReviews)})
+			external := ciObservationFindings(ciIssues{requiredReviews: requiredReviews(sctx), checks: timeoutExternalReviews, failing: failingCheckNames(timeoutExternalReviews)})
 			if len(timeoutFailingChecks) > 0 || timeoutMergeConflict || mergeabilityBlockedReason != "" {
 				prior, _ := types.ParseFindingsJSON(outcome.Findings)
 				external.Items = append(prior.Items, external.Items...)
@@ -868,6 +868,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 					s.observedCompletedAt = terminalFailureCompletionTimes(checks)
 					findings := ciObservationFindings(ciIssues{
 						provider:            host.Provider(),
+						requiredReviews:     requiredReviews(sctx),
 						checks:              checks,
 						failing:             failing,
 						unresolvedCancelled: unresolvedCancelled,
@@ -957,7 +958,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 						}
 						clearCIMonitorReady(sctx)
 						sctx.DeferredFindings = ""
-						findings := ciObservationFindings(ciIssues{provider: host.Provider(), checks: checks, behindBase: true})
+						findings := ciObservationFindings(ciIssues{provider: host.Provider(), requiredReviews: requiredReviews(sctx), checks: checks, behindBase: true})
 						sctx.Log(fmt.Sprintf("issues detected: %s", findings.Summary))
 						return ciObservationOutcome(findings), nil
 					}

@@ -778,7 +778,7 @@ type CI struct {
 	// it is opt-in (see VISION.md).
 	RevalidateRepairs bool
 	// ReviewBotComments selects when the CI step reads a registered review
-	// bot's (scm.ReviewBots) unresolved review comments.
+	// bot's (scm.ReviewBotsFor) unresolved review comments.
 	//
 	// "on_failure" (default): only when the bot's check failed, so a green
 	// bot check never blocks checks-passed.

@@ -9,7 +9,14 @@ import (
 )
 
 func requiresExternalReview(sctx *pipeline.StepContext) bool {
-	return sctx.Config != nil && len(sctx.Config.CI.RequiredReviews) != 0
+	return len(requiredReviews(sctx)) != 0
+}
+
+func requiredReviews(sctx *pipeline.StepContext) []string {
+	if sctx.Config == nil {
+		return nil
+	}
+	return sctx.Config.CI.RequiredReviews
 }
 
 // requiredReviewChecks checks that the forge adapter supplied every opted-in

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -240,6 +241,9 @@ type ReviewBot struct {
 	// providers keep their existing slug/login matching contract.
 	AppID    int64
 	AuthorID int64
+	// RequiredReview names the ci.required_reviews entry an opt-in bot needs;
+	// without it such a bot is never recognized.
+	RequiredReview string
 
 	// AppSlug is the provider app slug the bot publishes its check under.
 	AppSlug string
@@ -258,13 +262,25 @@ const CodeRabbitAuthorID int64 = 136622811
 // bot is one entry here.
 var ReviewBots = []ReviewBot{
 	{AppSlug: "greptile-apps", Logins: []string{"greptile-apps[bot]", "greptile-apps"}, GitLabLogins: []string{"greptileai"}},
-	{AppSlug: "coderabbitai", AppID: CodeRabbitAppID, AuthorID: CodeRabbitAuthorID, Logins: []string{"coderabbitai", "coderabbitai[bot]"}},
+	{AppSlug: "coderabbitai", RequiredReview: "coderabbit", AppID: CodeRabbitAppID, AuthorID: CodeRabbitAuthorID, Logins: []string{"coderabbitai", "coderabbitai[bot]"}},
 }
 
-// ReviewBotForCheck authenticates a registered bot's check publisher. CodeRabbit
-// requires its immutable GitHub.com app identity; Greptile retains slug matching.
-func ReviewBotForCheck(check Check) (ReviewBot, bool) {
+// ReviewBotsFor returns the registered bots a run recognizes: every bot that
+// needs no opt-in, plus each opt-in bot that requiredReviews names.
+func ReviewBotsFor(requiredReviews []string) []ReviewBot {
+	var bots []ReviewBot
 	for _, bot := range ReviewBots {
+		if bot.RequiredReview == "" || slices.Contains(requiredReviews, bot.RequiredReview) {
+			bots = append(bots, bot)
+		}
+	}
+	return bots
+}
+
+// ReviewBotForCheck authenticates the check publisher among bots. CodeRabbit
+// requires its immutable GitHub.com app identity; Greptile retains slug matching.
+func ReviewBotForCheck(bots []ReviewBot, check Check) (ReviewBot, bool) {
+	for _, bot := range bots {
 		if bot.AppID != 0 {
 			if check.AppHost == "github.com" && check.AppID == bot.AppID {
 				return bot, true
