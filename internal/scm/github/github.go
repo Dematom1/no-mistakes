@@ -583,7 +583,32 @@ func (h *Host) getPRChecks(ctx context.Context, selector string) ([]scm.Check, e
 // repository's own Actions jobs, without matching check names.
 const commitChecksQuery = `query($owner:String!,$name:String!,$oid:String!,$cursor:String){repository(owner:$owner,name:$name){object(expression:$oid){... on Commit{statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{databaseId name status conclusion completedAt startedAt detailsUrl checkSuite{app{slug databaseId}}} ... on StatusContext{id context state targetUrl}} pageInfo{hasNextPage endCursor}}}}}}}`
 
-const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{isResolved comments(first:100){nodes{databaseId body path line url createdAt author{login ... on Bot{databaseId}}}}} pageInfo{hasNextPage endCursor}}}}}`
+const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{id isResolved comments(first:100){` + reviewCommentsSelection + `}} pageInfo{hasNextPage endCursor}}}}}`
+
+// reviewThreadCommentsQuery reads the rest of one thread's comments when the
+// first page of reviewThreadsQuery could not hold them all.
+const reviewThreadCommentsQuery = `query($id:ID!,$cursor:String){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){` + reviewCommentsSelection + `}}}}`
+
+const reviewCommentsSelection = `nodes{databaseId body path line url createdAt author{login ... on Bot{databaseId}}} pageInfo{hasNextPage endCursor}`
+
+type reviewCommentConnection struct {
+	Nodes []struct {
+		ID        int64     `json:"databaseId"`
+		Body      string    `json:"body"`
+		Path      string    `json:"path"`
+		Line      *int      `json:"line"`
+		URL       string    `json:"url"`
+		CreatedAt time.Time `json:"createdAt"`
+		Author    *struct {
+			Login string `json:"login"`
+			ID    int64  `json:"databaseId"`
+		} `json:"author"`
+	} `json:"nodes"`
+	PageInfo struct {
+		HasNextPage bool   `json:"hasNextPage"`
+		EndCursor   string `json:"endCursor"`
+	} `json:"pageInfo"`
+}
 
 func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check, error) {
 	repo := h.repoSlug()
@@ -1548,21 +1573,9 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 					PullRequest *struct {
 						ReviewThreads *struct {
 							Nodes []struct {
-								IsResolved bool `json:"isResolved"`
-								Comments   struct {
-									Nodes []struct {
-										ID        int64     `json:"databaseId"`
-										Body      string    `json:"body"`
-										Path      string    `json:"path"`
-										Line      *int      `json:"line"`
-										URL       string    `json:"url"`
-										CreatedAt time.Time `json:"createdAt"`
-										Author    *struct {
-											Login string `json:"login"`
-											ID    int64  `json:"databaseId"`
-										} `json:"author"`
-									} `json:"nodes"`
-								} `json:"comments"`
+								ID         string                  `json:"id"`
+								IsResolved bool                    `json:"isResolved"`
+								Comments   reviewCommentConnection `json:"comments"`
 							} `json:"nodes"`
 							PageInfo struct {
 								HasNextPage bool   `json:"hasNextPage"`
@@ -1593,28 +1606,25 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 			if thread.IsResolved {
 				continue
 			}
-			for _, raw := range thread.Comments.Nodes {
-				if raw.Author == nil || !scm.IsReviewBotLogin(scm.ProviderGitHub, raw.Author.Login) {
-					continue
+			// A partial thread must never read as a clean one, so every page
+			// of an unresolved thread's comments is read before it counts.
+			page := thread.Comments
+			for commentCursor := ""; ; {
+				if page.Nodes == nil {
+					return nil, errors.New("PR review comments response did not contain thread comments")
 				}
-				bot, _ := scm.ReviewBotForLogin(scm.ProviderGitHub, raw.Author.Login)
-				if bot.AuthorID != 0 && (h.host != "github.com" || raw.Author.ID != bot.AuthorID) {
-					continue
+				comments = appendReviewBotComments(comments, page, h.host)
+				if !page.PageInfo.HasNextPage {
+					break
 				}
-				line := 0
-				if raw.Line != nil {
-					line = *raw.Line
+				if thread.ID == "" || page.PageInfo.EndCursor == "" || page.PageInfo.EndCursor == commentCursor {
+					return nil, errors.New("PR review comments response returned an invalid thread comment cursor")
 				}
-				comments = append(comments, scm.ReviewComment{
-					ID:        strconv.FormatInt(raw.ID, 10),
-					Author:    raw.Author.Login,
-					AuthorID:  raw.Author.ID,
-					Path:      raw.Path,
-					Line:      line,
-					Body:      raw.Body,
-					CreatedAt: raw.CreatedAt,
-					URL:       raw.URL,
-				})
+				commentCursor = page.PageInfo.EndCursor
+				page, err = h.getReviewThreadComments(ctx, thread.ID, commentCursor)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		if !threads.PageInfo.HasNextPage {
@@ -1626,4 +1636,63 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 		cursor = threads.PageInfo.EndCursor
 	}
 	return comments, nil
+}
+
+func (h *Host) getReviewThreadComments(ctx context.Context, threadID, cursor string) (reviewCommentConnection, error) {
+	args := []string{"api"}
+	if h.host != "" {
+		args = append(args, "--hostname", h.host)
+	}
+	args = append(args, "graphql", "-f", "query="+reviewThreadCommentsQuery, "-F", "id="+threadID, "-F", "cursor="+cursor)
+	out, err := h.cmd(ctx, "gh", args...).CombinedOutput()
+	if err != nil {
+		return reviewCommentConnection{}, fmt.Errorf("gh api PR review comments for a thread: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	var response struct {
+		Data struct {
+			Node *struct {
+				Comments *reviewCommentConnection `json:"comments"`
+			} `json:"node"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(out, &response); err != nil {
+		return reviewCommentConnection{}, fmt.Errorf("decode PR review comments JSON for a thread: %w", err)
+	}
+	if len(response.Errors) > 0 {
+		return reviewCommentConnection{}, fmt.Errorf("gh api PR review comments for a thread: %s", response.Errors[0].Message)
+	}
+	if response.Data.Node == nil || response.Data.Node.Comments == nil {
+		return reviewCommentConnection{}, errors.New("PR review comments response did not contain the thread")
+	}
+	return *response.Data.Node.Comments, nil
+}
+
+func appendReviewBotComments(comments []scm.ReviewComment, page reviewCommentConnection, host string) []scm.ReviewComment {
+	for _, raw := range page.Nodes {
+		if raw.Author == nil || !scm.IsReviewBotLogin(scm.ProviderGitHub, raw.Author.Login) {
+			continue
+		}
+		bot, _ := scm.ReviewBotForLogin(scm.ProviderGitHub, raw.Author.Login)
+		if bot.AuthorID != 0 && (host != "github.com" || raw.Author.ID != bot.AuthorID) {
+			continue
+		}
+		line := 0
+		if raw.Line != nil {
+			line = *raw.Line
+		}
+		comments = append(comments, scm.ReviewComment{
+			ID:        strconv.FormatInt(raw.ID, 10),
+			Author:    raw.Author.Login,
+			AuthorID:  raw.Author.ID,
+			Path:      raw.Path,
+			Line:      line,
+			Body:      raw.Body,
+			CreatedAt: raw.CreatedAt,
+			URL:       raw.URL,
+		})
+	}
+	return comments
 }

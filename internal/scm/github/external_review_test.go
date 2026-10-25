@@ -213,6 +213,13 @@ func TestCodeRabbitRequiredChecksRejectMalformedFindings(t *testing.T) {
 		`{"data":{"repository":{"pullRequest":{"reviewThreads":{}}}}}`,
 		`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"comments":{"nodes":[{"body":[]}]}}]}}}}}`,
 		`{"errors":[{"message":"unavailable"}]}`,
+		// Missing comment nodes on an unresolved thread cannot read as clean.
+		`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"T1","isResolved":false,"comments":{}}],"pageInfo":{"hasNextPage":false}}}}}}`,
+		// A truncated thread whose remaining comments cannot be read.
+		`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}],"pageInfo":{"hasNextPage":false}}}}}}`,
+		`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"T1","isResolved":false,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}],"pageInfo":{"hasNextPage":false}}}}}}`,
+		`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"T-missing","isResolved":false,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}],"pageInfo":{"hasNextPage":false}}}}}}`,
+		`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"T-nodes","isResolved":false,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}],"pageInfo":{"hasNextPage":false}}}}}}`,
 	} {
 		t.Run(payload, func(t *testing.T) {
 			host := New(githubTestCmdFactory(map[string]githubTestResponse{
@@ -220,11 +227,52 @@ func TestCodeRabbitRequiredChecksRejectMalformedFindings(t *testing.T) {
 				"gh pr checks 42 --repo test/repo --json name,state,bucket,completedAt,link":                                                               {stdout: `[{"name":"CodeRabbit","state":"SUCCESS","bucket":"pass"}]`},
 				"gh api --hostname github.com --method GET repos/test/repo/actions/runs -f head_sha=" + reviewHead + " -f per_page=100 --paginate --slurp": {stdout: `[{"total_count":0,"workflow_runs":[]}]`},
 				"gh api --hostname github.com graphql -f query=" + reviewThreadsQuery + " -F owner=test -F name=repo -F number=42":                         {stdout: payload},
+				reviewThreadCommentsCommand("T-missing", "c1"):                                                                                             {stdout: `{"data":{"node":null}}`},
+				reviewThreadCommentsCommand("T-nodes", "c1"):                                                                                               {stdout: `{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false}}}}}`},
 			}), nil, "github.com", "test/repo").WithRequiredReviews([]string{"coderabbit"})
 			_, err := host.GetChecks(context.Background(), &scm.PR{Number: "42", HeadSHA: reviewHead})
 			if err == nil || !strings.Contains(err.Error(), "review comments") {
 				t.Fatalf("malformed findings error=%v", err)
 			}
 		})
+	}
+}
+
+func reviewThreadCommentsCommand(threadID, cursor string) string {
+	return "gh api --hostname github.com graphql -f query=" + reviewThreadCommentsQuery + " -F id=" + threadID + " -F cursor=" + cursor
+}
+
+// A thread holding more than one page of comments must be read to its end:
+// a CodeRabbit finding past the first 100 comments still blocks completion.
+func TestCodeRabbitRequiredChecksReadEveryThreadCommentPage(t *testing.T) {
+	t.Parallel()
+	human := make([]map[string]any, 100)
+	for i := range human {
+		human[i] = map[string]any{"databaseId": i + 1, "body": "human", "author": map[string]any{"login": "reviewer"}}
+	}
+	firstPage, _ := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"reviewThreads": map[string]any{
+		"nodes":    []any{map[string]any{"id": "T1", "isResolved": false, "comments": map[string]any{"nodes": human, "pageInfo": map[string]any{"hasNextPage": true, "endCursor": "c1"}}}},
+		"pageInfo": map[string]any{"hasNextPage": false},
+	}}}}})
+	secondPage := `{"data":{"node":{"comments":{"nodes":[{"databaseId":101,"body":"late finding","path":"main.go","line":3,"author":{"login":"coderabbitai","databaseId":136622811}}],"pageInfo":{"hasNextPage":false}}}}}`
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		reviewHeadCommand: {stdout: reviewHead}, reviewChecksCommand: {stdout: reviewPage(reviewRun())},
+		"gh pr checks 42 --repo test/repo --json name,state,bucket,completedAt,link":                                                               {stdout: `[{"name":"CodeRabbit","state":"SUCCESS","bucket":"pass"}]`},
+		"gh api --hostname github.com --method GET repos/test/repo/actions/runs -f head_sha=" + reviewHead + " -f per_page=100 --paginate --slurp": {stdout: `[{"total_count":0,"workflow_runs":[]}]`},
+		"gh api --hostname github.com graphql -f query=" + reviewThreadsQuery + " -F owner=test -F name=repo -F number=42":                         {stdout: string(firstPage)},
+		reviewThreadCommentsCommand("T1", "c1"): {stdout: secondPage},
+	}), nil, "github.com", "test/repo").WithRequiredReviews([]string{"coderabbit"})
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "42", HeadSHA: reviewHead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var review *scm.Check
+	for i := range checks {
+		if checks[i].ExternalReview == "coderabbit" {
+			review = &checks[i]
+		}
+	}
+	if review == nil || review.Bucket != scm.CheckBucketFail || review.State != "UNRESOLVED_FINDINGS" {
+		t.Fatalf("review check=%+v (all=%+v)", review, checks)
 	}
 }
