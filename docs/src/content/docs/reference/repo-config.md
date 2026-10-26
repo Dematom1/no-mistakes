@@ -780,13 +780,17 @@ Reruns are skipped when:
 ### ci.required_reviews
 
 An optional list of external reviewers that must finish before the CI monitor reports `checks-passed`.
-The default is `[]`; the only supported reviewer profile is `coderabbit` on GitHub.com.
+The default is `[]`; `coderabbit` is supported on GitHub.com and on GitHub Enterprise Server (GHES) when its instance-local GitHub App ID is pinned. GitLab, Bitbucket, Azure DevOps, Gitea, Forgejo, Cursor Origin, and provider plugins remain explicitly unsupported because CodeRabbit does not document a stable completion signal bound to the current head for those adapters.
 Enable it in the trusted default branch's `.no-mistakes.yaml`:
 
 ```yaml
 ci:
   required_reviews: [coderabbit]
+  # GHES only: the immutable CodeRabbit GitHub App ID on this GHES instance.
+  required_review_app_id: 12345
 ```
+
+Omit `required_review_app_id` on GitHub.com; no-mistakes uses the documented app ID `347564` there. GHES requires this positive ID from that instance's CodeRabbit app; it does not infer identity from the mutable app slug. Without it, GHES reports the explicit unsupported finding. This setting is trusted-only, like the rest of `ci`.
 
 The whole `ci` block is trusted-only, even with `allow_repo_commands: true`.
 A pushed branch cannot disable the requirement or enable it for itself.
@@ -798,7 +802,7 @@ no-mistakes uses the existing GitHub CLI authentication for read-only observatio
 When the list is empty, no additional completion checks are made.
 Existing CI and Greptile behavior stays unchanged. CodeRabbit is recognized as a review bot only when this list names `coderabbit`: otherwise an installed CodeRabbit's check is an ordinary CI check and its review-thread comments are never findings, exactly as if no-mistakes had no CodeRabbit support. Once opted in, failed CodeRabbit checks use the same review-bot findings path as Greptile.
 
-Completion requires the latest `CodeRabbit` check run from GitHub.com app ID `347564`, a nonempty immutable check-run ID, `status: completed`, `conclusion: success`, and a `head_sha` matching the exact current PR head.
+Completion requires the latest `CodeRabbit` check run from the trusted app ID (`347564` on GitHub.com, or the configured instance-local ID on GHES), a nonempty immutable check-run ID, `status: completed`, `conclusion: success`, and a `head_sha` matching the exact current PR head.
 The adapter pins the check query to that SHA and verifies the live PR head before and after discovery.
 Names, slugs, formal approvals, and review/comment bodies cannot establish completion.
 Unresolved CodeRabbit review-thread comments from the verified GitHub bot account become bounded `ask-user` findings in the existing review model, even when the required completion check succeeded.
@@ -817,10 +821,7 @@ That name or output title vetoes completion even alongside another successful ch
 A separately named rate-limit check remains blocking while GitHub still returns it among the latest checks at that head; no-mistakes does not guess from comment text that the limit has cleared.
 The monitor never posts review commands, requests a paid review, or retries a review on the provider's behalf.
 
-Strict gating on GitLab and other forges is unsupported and parks with an explicit unsupported finding when enabled.
-GitLab approvals and discussion activity are not a documented CodeRabbit completion signal.
-GitHub Enterprise Server is also unsupported because its separately installed app has a different immutable identity.
-Leave this setting empty on those platforms to retain normal CI behavior.
+Strict gating on GitLab, Bitbucket Cloud/Data Center, Azure DevOps, Gitea, Forgejo, Cursor Origin, and provider plugins remains unsupported and parks with an explicit unsupported finding when enabled. Their documented CodeRabbit integrations expose reviews, comments, approvals, or provider statuses, but not a stable, verified CodeRabbit completion signal tied to the exact current head. GHES is supported only with its instance-local immutable App ID configured as above.
 
 This gates no-mistakes readiness, not direct forge merges or merge-queue synthetic commits.
 The merge caller must recheck readiness for the current head and bind its merge request to that SHA.

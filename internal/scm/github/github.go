@@ -23,13 +23,14 @@ type CmdFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 // Host talks to GitHub through the gh CLI.
 type Host struct {
-	cmd             CmdFactory
-	cliAvailable    func() bool
-	host            string // repo's GitHub hostname; scopes the auth check
-	repo            string // "owner/name" slug for --repo; empty when unknown
-	forkOwner       string // fork owner for cross-repository PR heads
-	requiredReviews []string
-	draft           bool // open created PRs as drafts (gh pr create --draft)
+	cmd                 CmdFactory
+	cliAvailable        func() bool
+	host                string // repo's GitHub hostname; scopes the auth check
+	repo                string // "owner/name" slug for --repo; empty when unknown
+	forkOwner           string // fork owner for cross-repository PR heads
+	requiredReviews     []string
+	requiredReviewAppID int64
+	draft               bool // open created PRs as drafts (gh pr create --draft)
 	// assetHTTP and assetUploadPrefix override the unofficial user-attachments
 	// upload transport in tests. Production leaves both nil/empty and uses
 	// http.DefaultClient against uploads.github.com (or uploads.<ghec-host>).
@@ -58,8 +59,9 @@ func New(cmd CmdFactory, cliAvailable func() bool, host, repo string) *Host {
 
 // WithRequiredReviews opts the existing check adapter into strict completion
 // semantics for the named review bots. The default does no extra discovery.
-func (h *Host) WithRequiredReviews(reviewers []string) *Host {
+func (h *Host) WithRequiredReviews(reviewers []string, appID int64) *Host {
 	h.requiredReviews = append([]string(nil), reviewers...)
+	h.requiredReviewAppID = appID
 	return h
 }
 

@@ -151,7 +151,7 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 		draft := sctx.Config != nil && sctx.Config.Providers.GitHub.DraftPullRequests
 		gh := github.NewWithFork(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, host, repo, forkRepo, draft)
 		if sctx.Config != nil {
-			gh.WithRequiredReviews(sctx.Config.CI.RequiredReviews)
+			gh.WithRequiredReviews(sctx.Config.CI.RequiredReviews, sctx.Config.CI.RequiredReviewAppID)
 		}
 		return gh, ""
 	case scm.ProviderGitLab:

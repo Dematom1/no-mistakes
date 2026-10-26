@@ -2,6 +2,13 @@ package config
 
 import "fmt"
 
+func validateRequiredReviewAppID(appID *int64) error {
+	if appID != nil && *appID <= 0 {
+		return fmt.Errorf("ci.required_review_app_id must be a positive GitHub App ID")
+	}
+	return nil
+}
+
 func validateRequiredReviews(reviewers []string) error {
 	seen := map[string]bool{}
 	for _, reviewer := range reviewers {

@@ -64,6 +64,7 @@ func TestCodeRabbitRegistryRequiresImmutableGitHubIdentity(t *testing.T) {
 		{Check{App: "coderabbitai", AppID: 1, AppHost: "github.com"}, false},
 		{Check{App: "coderabbitai", AppID: CodeRabbitAppID, AppHost: "ghe.example.com"}, false},
 		{Check{AppID: CodeRabbitAppID, AppHost: "github.com"}, true},
+		{Check{ExternalReview: "coderabbit", AppID: 987, AppHost: "ghe.example.com"}, true},
 		{Check{App: "greptile-apps"}, true},
 	} {
 		_, ok := ReviewBotForCheck(ReviewBotsFor([]string{"coderabbit"}), tc.check)

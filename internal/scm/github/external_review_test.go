@@ -154,6 +154,30 @@ func TestExternalReviewUnsupportedDoesNotCallForge(t *testing.T) {
 	}
 }
 
+func TestExternalReviewGHESWithoutPinnedIDReturnsActionableUnsupportedCheck(t *testing.T) {
+	t.Parallel()
+	host := New(nil, nil, "ghe.example.com", "test/repo").WithRequiredReviews([]string{"coderabbit"}, 0)
+	checks, err := host.requiredReviewChecks(context.Background(), &scm.PR{HeadSHA: reviewHead}, "coderabbit", nil)
+	if err != nil || len(checks) != 1 || checks[0].HeadSHA != reviewHead || !strings.Contains(checks[0].State, "ci.required_review_app_id") {
+		t.Fatalf("unsupported GHES = %+v, %v", checks, err)
+	}
+}
+
+func TestExternalReviewGHESRequiresPinnedInstanceAppID(t *testing.T) {
+	t.Parallel()
+	const appID = int64(987)
+	checkCommand := "gh api --hostname ghe.example.com --method GET repos/test/repo/commits/" + reviewHead + "/check-runs -f app_id=987 -f filter=latest -f per_page=100 --paginate --slurp"
+	run := reviewRun()
+	run["app"] = map[string]any{"id": appID}
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		reviewHeadCommand: {stdout: reviewHead}, checkCommand: {stdout: reviewPage(run)},
+	}), nil, "ghe.example.com", "test/repo").WithRequiredReviews([]string{"coderabbit"}, appID)
+	got, err := host.getExternalReview(context.Background(), &scm.PR{Number: "42", HeadSHA: reviewHead}, "coderabbit")
+	if err != nil || got.State != reviewCompletionComplete || got.AppID != appID {
+		t.Fatalf("GHES review = %+v, %v", got, err)
+	}
+}
+
 func TestExternalReviewAllPagesAndPendingSibling(t *testing.T) {
 	t.Parallel()
 	good := reviewRun()
@@ -229,7 +253,7 @@ func TestCodeRabbitRequiredChecksRejectMalformedFindings(t *testing.T) {
 				"gh api --hostname github.com graphql -f query=" + reviewThreadsQuery + " -F owner=test -F name=repo -F number=42":                         {stdout: payload},
 				reviewThreadCommentsCommand("T-missing", "c1"):                                                                                             {stdout: `{"data":{"node":null}}`},
 				reviewThreadCommentsCommand("T-nodes", "c1"):                                                                                               {stdout: `{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false}}}}}`},
-			}), nil, "github.com", "test/repo").WithRequiredReviews([]string{"coderabbit"})
+			}), nil, "github.com", "test/repo").WithRequiredReviews([]string{"coderabbit"}, 0)
 			_, err := host.GetChecks(context.Background(), &scm.PR{Number: "42", HeadSHA: reviewHead})
 			if err == nil || !strings.Contains(err.Error(), "review comments") {
 				t.Fatalf("malformed findings error=%v", err)
@@ -261,7 +285,7 @@ func TestCodeRabbitRequiredChecksReadEveryThreadCommentPage(t *testing.T) {
 		"gh api --hostname github.com --method GET repos/test/repo/actions/runs -f head_sha=" + reviewHead + " -f per_page=100 --paginate --slurp": {stdout: `[{"total_count":0,"workflow_runs":[]}]`},
 		"gh api --hostname github.com graphql -f query=" + reviewThreadsQuery + " -F owner=test -F name=repo -F number=42":                         {stdout: string(firstPage)},
 		reviewThreadCommentsCommand("T1", "c1"): {stdout: secondPage},
-	}), nil, "github.com", "test/repo").WithRequiredReviews([]string{"coderabbit"})
+	}), nil, "github.com", "test/repo").WithRequiredReviews([]string{"coderabbit"}, 0)
 	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "42", HeadSHA: reviewHead})
 	if err != nil {
 		t.Fatal(err)

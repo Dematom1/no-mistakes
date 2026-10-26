@@ -14,9 +14,8 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 )
 
-// GitHub.com GET /apps/coderabbitai identifies this immutable app ID. A slug
-// or check name alone is impersonable. GHES installations have different IDs
-// and are deliberately unsupported by this profile.
+// GitHub.com GET /apps/coderabbitai identifies its immutable app ID. GHES IDs
+// are instance-local and must be explicitly pinned in trusted configuration.
 const codeRabbitAppID = scm.CodeRabbitAppID
 
 type reviewState string
@@ -46,8 +45,15 @@ type reviewCompletion struct {
 // No review/comment body is read or used as an instruction or positive proof.
 func (h *Host) getExternalReview(ctx context.Context, pr *scm.PR, reviewer string) (reviewCompletion, error) {
 	result := reviewCompletion{State: reviewCompletionUnsupported}
-	if reviewer != "coderabbit" || !strings.EqualFold(h.host, "github.com") {
+	if reviewer != "coderabbit" || h.host == "" {
 		return result, nil
+	}
+	appID := codeRabbitAppID
+	if !strings.EqualFold(h.host, "github.com") {
+		if h.requiredReviewAppID <= 0 {
+			return result, nil
+		}
+		appID = h.requiredReviewAppID
 	}
 	selector, err := prSelector(pr)
 	if err != nil {
@@ -59,7 +65,7 @@ func (h *Host) getExternalReview(ctx context.Context, pr *scm.PR, reviewer strin
 		return result, fmt.Errorf("external review requires a full PR head SHA")
 	}
 	result.HeadSHA = head
-	result.AppID = codeRabbitAppID
+	result.AppID = appID
 	result.CheckNames = []string{"CodeRabbit", "Review rate limited"}
 	verifyHead := func() error {
 		current, err := h.getPRHeadSHA(ctx, selector)
@@ -76,7 +82,7 @@ func (h *Host) getExternalReview(ctx context.Context, pr *scm.PR, reviewer strin
 	}
 	endpoint := "repos/" + h.repoSlug() + "/commits/" + url.PathEscape(head) + "/check-runs"
 	args := []string{"api", "--hostname", h.host, "--method", "GET", endpoint,
-		"-f", "app_id=" + strconv.FormatInt(codeRabbitAppID, 10), "-f", "filter=latest",
+		"-f", "app_id=" + strconv.FormatInt(appID, 10), "-f", "filter=latest",
 		"-f", "per_page=100", "--paginate", "--slurp"}
 	out, err := h.cmd(ctx, "gh", args...).CombinedOutput()
 	if err != nil {
@@ -113,7 +119,7 @@ func (h *Host) getExternalReview(ctx context.Context, pr *scm.PR, reviewer strin
 		}
 		for _, run := range page.Runs {
 			count++
-			if run.ID <= 0 || seen[run.ID] || run.App.ID != codeRabbitAppID || run.Head != head {
+			if run.ID <= 0 || seen[run.ID] || run.App.ID != appID || run.Head != head {
 				return result, fmt.Errorf("external review check identity or head could not be verified")
 			}
 			seen[run.ID] = true
@@ -171,6 +177,17 @@ func (h *Host) requiredReviewChecks(ctx context.Context, pr *scm.PR, reviewer st
 		return nil, err
 	}
 	if review.State == reviewCompletionUnsupported {
+		if reviewer == "coderabbit" && h.host != "" && !strings.EqualFold(h.host, "github.com") && h.requiredReviewAppID <= 0 {
+			head := pr.ObservedHeadSHA
+			if head == "" {
+				head = pr.HeadSHA
+			}
+			return append(checks, scm.Check{
+				Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit",
+				HeadSHA: head, Bucket: scm.CheckBucketFail,
+				State: "UNSUPPORTED ON GITHUB ENTERPRISE SERVER; configure trusted ci.required_review_app_id",
+			}), nil
+		}
 		return checks, nil
 	}
 	owned := map[string]bool{}
