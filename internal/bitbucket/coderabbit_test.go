@@ -17,9 +17,9 @@ func TestCodeRabbitCheckRequiresFreshTrustedReviewAndNoOpenBotTask(t *testing.T)
 		want                           scm.CheckBucket
 	}{
 		{"fresh bot review", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketPass},
-		{"wrong identity", "{other-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketFail},
-		{"stale review", "{bot-uuid}", "2025-12-31T00:00:00Z", "CLOSED", false, scm.CheckBucketFail},
-		{"outdated diff note", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", true, scm.CheckBucketFail},
+		{"wrong identity", "{other-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketPending},
+		{"stale review", "{bot-uuid}", "2025-12-31T00:00:00Z", "CLOSED", false, scm.CheckBucketPending},
+		{"outdated diff note", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", true, scm.CheckBucketPending},
 		{"open bot thread", "{bot-uuid}", "2026-01-02T00:00:00Z", "OPEN", false, scm.CheckBucketFail},
 		{"adversarial body is not evidence", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketPass},
 	} {

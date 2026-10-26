@@ -249,7 +249,6 @@ func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check
 	if pushedAt.IsZero() {
 		return check, true, nil
 	}
-	check.Bucket = scm.CheckBucketFail
 	discussionArgs := []string{"api", "--paginate", fmt.Sprintf("projects/%s/merge_requests/%s/discussions?per_page=100", encodeProjectPath(h.projectPath), pr.Number)}
 	if h.host != "" {
 		discussionArgs = append(discussionArgs, "--hostname", h.host)
@@ -269,6 +268,7 @@ func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check
 				continue
 			}
 			if note.Resolvable && !note.Resolved && !note.System {
+				check.Bucket, check.State = scm.CheckBucketFail, "Unresolved review finding"
 				return check, true, nil
 			}
 			if note.CreatedAt.After(pushedAt) && (note.Position == nil || note.Position.HeadSHA == "" || note.Position.HeadSHA == check.HeadSHA) {

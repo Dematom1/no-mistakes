@@ -114,8 +114,8 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 	var response struct {
 		Count *int `json:"count"`
 		Value []struct {
-			ID            int `json:"id"`
-			Status        int `json:"status"`
+			ID            int    `json:"id"`
+			Status        string `json:"status"`
 			ThreadContext struct {
 				FilePath       string `json:"filePath"`
 				RightFileStart struct {
@@ -144,7 +144,8 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 	}
 	var comments []scm.ReviewComment
 	for _, thread := range response.Value {
-		if thread.Status != 1 && thread.Status != 5 {
+		switch strings.ToLower(strings.TrimSpace(thread.Status)) {
+		case "fixed", "wontfix", "closed", "bydesign":
 			continue
 		}
 		for _, comment := range thread.Comments {
@@ -566,6 +567,13 @@ func (h *Host) getChecksWithRequiredReviews(ctx context.Context, pr *scm.PR) ([]
 	}
 	if check.Bucket == scm.CheckBucketPass && len(comments) > 0 {
 		check.Bucket, check.State = scm.CheckBucketFail, "UNRESOLVED_FINDINGS"
+	}
+	latest, err = h.showPR(ctx, pr)
+	if err != nil {
+		return nil, err
+	}
+	if latest.LastMergeSourceCommit.CommitID != head {
+		return nil, fmt.Errorf("%w during Azure DevOps review findings discovery", scm.ErrHeadChanged)
 	}
 	if prID == "" {
 		return nil, errors.New("az repos pr policy list: missing PR id")

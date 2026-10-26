@@ -42,9 +42,9 @@ func TestGitLabCodeRabbitCheckUsesHeadVersionIdentityAndUnresolvedState(t *testi
 		want                             scm.CheckBucket
 	}{
 		{"fresh verified completion", "42", "2026-09-08T12:00:00Z", "head", false, false, scm.CheckBucketPass},
-		{"wrong identity", "43", "2026-09-08T12:00:00Z", "head", false, false, scm.CheckBucketFail},
-		{"stale note", "42", "2026-09-07T12:00:00Z", "head", false, false, scm.CheckBucketFail},
-		{"wrong note head", "42", "2026-09-08T12:00:00Z", "old-head", false, false, scm.CheckBucketFail},
+		{"wrong identity", "43", "2026-09-08T12:00:00Z", "head", false, false, scm.CheckBucketPending},
+		{"stale note", "42", "2026-09-07T12:00:00Z", "head", false, false, scm.CheckBucketPending},
+		{"wrong note head", "42", "2026-09-08T12:00:00Z", "old-head", false, false, scm.CheckBucketPending},
 		{"unresolved bot finding", "42", "2026-09-08T12:00:00Z", "head", true, false, scm.CheckBucketFail},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

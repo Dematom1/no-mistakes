@@ -61,7 +61,7 @@ func TestRequiredReviewReadsOnlyUnresolvedThreadsFromConfiguredIdentity(t *testi
 	threadsCommand := "az rest --method get --url " + threadsURL + " --output json"
 	responses := map[string]azdoTestResponse{
 		"az repos pr show --id 42 --organization " + testOrg + " --output json": {stdout: azureReviewPR(azureReviewHead)},
-		threadsCommand: {stdout: `{"count":2,"value":[{"id":1,"status":1,"threadContext":{"filePath":"src/a.go","rightFileStart":{"line":8}},"comments":[{"id":10,"content":"untrusted text","author":{"id":"` + azureReviewBotID + `","displayName":"CodeRabbit"}}]},{"id":2,"status":2,"comments":[{"id":11,"content":"resolved","author":{"id":"` + azureReviewBotID + `"}}]}]}`},
+		threadsCommand: {stdout: `{"count":2,"value":[{"id":1,"status":"active","threadContext":{"filePath":"src/a.go","rightFileStart":{"line":8}},"comments":[{"id":10,"content":"untrusted text","author":{"id":"` + azureReviewBotID + `","displayName":"CodeRabbit"}}]},{"id":2,"status":"fixed","comments":[{"id":11,"content":"resolved","author":{"id":"` + azureReviewBotID + `"}}]}]}`},
 	}
 	host := newTestHost(responses).WithRequiredReviews([]string{"coderabbit"}, azureReviewBotID)
 	if !host.Capabilities().ReviewComments {
@@ -70,6 +70,30 @@ func TestRequiredReviewReadsOnlyUnresolvedThreadsFromConfiguredIdentity(t *testi
 	comments, err := host.GetReviewComments(context.Background(), &scm.PR{Number: "42"})
 	if err != nil || len(comments) != 1 || comments[0].Path != "src/a.go" || comments[0].Line != 8 || !comments[0].VerifiedAuthor {
 		t.Fatalf("comments=%+v, err=%v", comments, err)
+	}
+}
+
+func TestAzureReviewThreadStatusNames(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		status string
+		want   int
+	}{
+		{"active", 1}, {"pending", 1}, {"fixed", 0}, {"wontFix", 0}, {"closed", 0}, {"byDesign", 0}, {"future", 1},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			threadsURL := testOrg + "/myproject/_apis/git/repositories/myrepo/pullRequests/42/threads?api-version=7.1"
+			threadsCommand := "az rest --method get --url " + threadsURL + " --output json"
+			body := fmt.Sprintf(`{"count":1,"value":[{"id":1,"status":%q,"threadContext":{"filePath":"a.go","rightFileStart":{"line":3}},"comments":[{"id":2,"content":"x","author":{"id":%q}}]}]}`, tc.status, azureReviewBotID)
+			host := newTestHost(map[string]azdoTestResponse{
+				"az repos pr show --id 42 --organization " + testOrg + " --output json": {stdout: azureReviewPR(azureReviewHead)},
+				threadsCommand: {stdout: body},
+			}).WithRequiredReviews([]string{"coderabbit"}, azureReviewBotID)
+			comments, err := host.GetReviewComments(context.Background(), &scm.PR{Number: "42"})
+			if err != nil || len(comments) != tc.want {
+				t.Fatalf("status %q comments=%+v err=%v", tc.status, comments, err)
+			}
+		})
 	}
 }
 
@@ -95,6 +119,34 @@ func TestRequiredReviewStatusHeadMovementFailsClosed(t *testing.T) {
 	_, err := host.GetChecks(context.Background(), &scm.PR{Number: "42"})
 	if !errors.Is(err, scm.ErrHeadChanged) {
 		t.Fatalf("head movement error=%v", err)
+	}
+}
+
+func TestRequiredReviewHeadMovementDuringCommentReadFailsClosed(t *testing.T) {
+	t.Parallel()
+	threadsURL := testOrg + "/myproject/_apis/git/repositories/myrepo/pullRequests/42/threads?api-version=7.1"
+	threadsCommand := "az rest --method get --url " + threadsURL + " --output json"
+	responses := map[string]azdoTestResponse{
+		"az repos pr policy list --id 42 --organization " + testOrg + " --output json": {stdout: "[]"},
+		"az repos pr show --id 42 --organization " + testOrg + " --output json":        {stdout: azureReviewPR(azureReviewHead)},
+		azureReviewStatusCommand(azureReviewHead):                                      {stdout: `{"count":1,"value":[{"id":17,"state":"succeeded","description":"Review completed","context":{"genre":"code review","name":"CodeRabbit"},"createdBy":{"id":"` + azureReviewBotID + `"}}]}`},
+		threadsCommand: {stdout: `{"count":0,"value":[]}`},
+	}
+	count := 0
+	host := New(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		key := strings.TrimSpace(name + " " + strings.Join(args, " "))
+		response := responses[key]
+		if strings.HasPrefix(key, "az repos pr show") {
+			count++
+			if count >= 3 {
+				response.stdout = azureReviewPR(strings.Repeat("b", 40))
+			}
+		}
+		return azdoTestCmdFactory(map[string]azdoTestResponse{key: response})(ctx, name, args...)
+	}, nil, testOrg, testProject, testRepo).WithRequiredReviews([]string{"coderabbit"}, azureReviewBotID)
+	_, err := host.GetChecks(context.Background(), &scm.PR{Number: "42"})
+	if !errors.Is(err, scm.ErrHeadChanged) {
+		t.Fatalf("head movement during comment read error=%v", err)
 	}
 }
 

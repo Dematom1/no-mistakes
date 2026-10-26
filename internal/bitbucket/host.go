@@ -160,7 +160,6 @@ func (h *Host) codeRabbitCheck(ctx context.Context, id int, head string) (scm.Ch
 	if commitDate.IsZero() {
 		return check, errors.New("Bitbucket source commit has no date")
 	}
-	check.Bucket = scm.CheckBucketFail
 	activity, err := h.client.ListPRReviewActivity(ctx, h.repo, id)
 	if err != nil {
 		return check, err
@@ -178,6 +177,7 @@ func (h *Host) codeRabbitCheck(ctx context.Context, id int, head string) (scm.Ch
 	}
 	for _, task := range tasks {
 		if task.Creator.UUID == h.requiredReviewBotID && strings.EqualFold(task.State, "OPEN") {
+			check.Bucket, check.State = scm.CheckBucketFail, "Unresolved review finding"
 			return check, nil
 		}
 	}
