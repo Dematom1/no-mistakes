@@ -197,6 +197,37 @@ func TestExternalReviewAllPagesAndPendingSibling(t *testing.T) {
 	}
 }
 
+func TestCodeRabbitReviewCommentsUseConfiguredGHESIdentity(t *testing.T) {
+	t.Parallel()
+	page := func(authorID int64) reviewCommentConnection {
+		data, _ := json.Marshal(map[string]any{"nodes": []any{map[string]any{"databaseId": 1, "body": "unresolved", "path": "main.go", "line": 7, "author": map[string]any{"login": "coderabbitai", "databaseId": authorID}}}})
+		var result reviewCommentConnection
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	const instanceID = int64(987)
+	for _, tc := range []struct {
+		name string
+		id   int64
+		want int
+	}{
+		{name: "configured identity blocks", id: instanceID, want: 1},
+		{name: "wrong identity is ignored", id: 136622811, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			comments := appendReviewBotComments(nil, page(tc.id), "ghe.example.com", instanceID)
+			if len(comments) != tc.want {
+				t.Fatalf("comments=%+v, want %d", comments, tc.want)
+			}
+			if tc.want == 1 && !comments[0].VerifiedAuthor {
+				t.Fatalf("configured GHES author was not verified: %+v", comments[0])
+			}
+		})
+	}
+}
+
 func TestCodeRabbitReviewCommentsShareThreadFiltering(t *testing.T) {
 	t.Parallel()
 	for _, hostName := range []string{"github.com", "ghe.example.com"} {
