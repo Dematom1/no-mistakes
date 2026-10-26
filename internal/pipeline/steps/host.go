@@ -202,7 +202,11 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 			return nil, "could not resolve Azure DevOps organization, project, and repository from the remote URL"
 		}
 		draft := sctx.Config != nil && sctx.Config.Providers.AzureDevOps.DraftPullRequests
-		return azuredevops.NewWithDraft(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo, draft), ""
+		host := azuredevops.NewWithDraft(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo, draft)
+		if sctx.Config != nil {
+			host.WithRequiredReviews(sctx.Config.CI.RequiredReviews, sctx.Config.CI.RequiredReviewBotID)
+		}
+		return host, ""
 	case scm.ProviderForgejo:
 		if sctx.Repo.ForkURL != "" {
 			return nil, "fork PR routing for Forgejo is not implemented"

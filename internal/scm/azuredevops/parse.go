@@ -9,14 +9,17 @@ import (
 
 // azPR is the subset of `az repos pr show/list/create` JSON output we consume.
 type azPR struct {
-	Title         string  `json:"title"`
-	Description   *string `json:"description"`
-	PullRequestID int     `json:"pullRequestId"`
-	Status        string  `json:"status"`      // active | completed | abandoned
-	MergeStatus   string  `json:"mergeStatus"` // notSet | queued | conflicts | succeeded | rejectedByPolicy | failure
-	SourceRefName string  `json:"sourceRefName"`
-	TargetRefName string  `json:"targetRefName"`
-	URL           string  `json:"url"` // _apis/... endpoint - NOT browsable
+	Title                 string  `json:"title"`
+	Description           *string `json:"description"`
+	PullRequestID         int     `json:"pullRequestId"`
+	Status                string  `json:"status"`      // active | completed | abandoned
+	MergeStatus           string  `json:"mergeStatus"` // notSet | queued | conflicts | succeeded | rejectedByPolicy | failure
+	SourceRefName         string  `json:"sourceRefName"`
+	LastMergeSourceCommit struct {
+		CommitID string `json:"commitId"`
+	} `json:"lastMergeSourceCommit"`
+	TargetRefName string `json:"targetRefName"`
+	URL           string `json:"url"` // _apis/... endpoint - NOT browsable
 	Repository    struct {
 		Name    string `json:"name"`
 		WebURL  string `json:"webUrl"` // .../_git/{repo} - browsable base

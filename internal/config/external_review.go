@@ -2,6 +2,13 @@ package config
 
 import "fmt"
 
+func validateRequiredReviewBotID(botID *string) error {
+	if botID != nil && *botID == "" {
+		return fmt.Errorf("ci.required_review_bot_id must not be empty")
+	}
+	return nil
+}
+
 func validateRequiredReviewAppID(appID *int64) error {
 	if appID != nil && *appID <= 0 {
 		return fmt.Errorf("ci.required_review_app_id must be a positive GitHub App ID")

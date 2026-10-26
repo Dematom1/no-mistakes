@@ -780,7 +780,7 @@ Reruns are skipped when:
 ### ci.required_reviews
 
 An optional list of external reviewers that must finish before the CI monitor reports `checks-passed`.
-The default is `[]`; `coderabbit` is supported on GitHub.com and on GitHub Enterprise Server (GHES) when its instance-local GitHub App ID is pinned. GitLab, Bitbucket, Azure DevOps, Gitea, Forgejo, Cursor Origin, and provider plugins remain explicitly unsupported because CodeRabbit does not document a stable completion signal bound to the current head for those adapters.
+The default is `[]`; `coderabbit` is supported on GitHub.com, GHES with its instance-local GitHub App ID pinned, and Azure DevOps Services when its CodeRabbit service identity ID is pinned. Azure DevOps Server remains unsupported because CodeRabbit documents this status surface for Services only. GitLab, Bitbucket Cloud/Data Center, Gitea, Forgejo, Cursor Origin, and provider plugins remain explicitly unsupported because CodeRabbit does not document a stable completion signal bound to the current head for those adapters.
 Enable it in the trusted default branch's `.no-mistakes.yaml`:
 
 ```yaml
@@ -788,9 +788,11 @@ ci:
   required_reviews: [coderabbit]
   # GHES only: the immutable CodeRabbit GitHub App ID on this GHES instance.
   required_review_app_id: 12345
+  # Azure DevOps only: CodeRabbit service user's immutable Azure identity ID.
+  required_review_bot_id: 00000000-1111-2222-3333-444444444444
 ```
 
-Omit `required_review_app_id` on GitHub.com; no-mistakes uses the documented app ID `347564` there. GHES requires this positive ID from that instance's CodeRabbit app; it does not infer identity from the mutable app slug. Without it, GHES reports the explicit unsupported finding. This setting is trusted-only, like the rest of `ci`.
+Omit `required_review_app_id` on GitHub.com; no-mistakes uses the documented app ID `347564` there. GHES requires this positive ID from that instance's CodeRabbit app; it does not infer identity from the mutable app slug. Azure DevOps requires `required_review_bot_id` to match the `createdBy.id` of the CodeRabbit status; find it from the configured service identity, not its display name. Without the relevant ID, that provider reports an explicit unsupported finding. These settings are trusted-only, like the rest of `ci`.
 
 The whole `ci` block is trusted-only, even with `allow_repo_commands: true`.
 A pushed branch cannot disable the requirement or enable it for itself.
@@ -802,13 +804,13 @@ no-mistakes uses the existing GitHub CLI authentication for read-only observatio
 When the list is empty, no additional completion checks are made.
 Existing CI and Greptile behavior stays unchanged. CodeRabbit is recognized as a review bot only when this list names `coderabbit`: otherwise an installed CodeRabbit's check is an ordinary CI check and its review-thread comments are never findings, exactly as if no-mistakes had no CodeRabbit support. Once opted in, failed CodeRabbit checks use the same review-bot findings path as Greptile.
 
-Completion requires the latest `CodeRabbit` check run from the trusted app ID (`347564` on GitHub.com, or the configured instance-local ID on GHES), a nonempty immutable check-run ID, `status: completed`, `conclusion: success`, and a `head_sha` matching the exact current PR head.
-The adapter pins the check query to that SHA and verifies the live PR head before and after discovery.
-Names, slugs, formal approvals, and review/comment bodies cannot establish completion.
+On GitHub.com/GHES, completion requires the latest `CodeRabbit` check run from the trusted app ID (`347564` on GitHub.com, or the configured instance-local ID on GHES), a nonempty immutable check-run ID, `status: completed`, `conclusion: success`, and a `head_sha` matching the exact current PR head. On Azure DevOps Services, it requires the latest `code review` / `CodeRabbit` commit status on the exact live PR source commit, authored by the configured `createdBy.id`, with state `succeeded` and description exactly `Review completed` or `Review approved`.
+The adapters pin status discovery to that SHA and verify the live PR head before and after discovery.
+Names, slugs, formal approvals, and review/comment bodies alone cannot establish completion.
 Unresolved CodeRabbit review-thread comments from the verified GitHub bot account become bounded `ask-user` findings in the existing review model, even when the required completion check succeeded.
 Every page of review threads and of each unresolved thread's comments is read; a response that cannot prove it is complete (missing comment nodes, an invalid page cursor, or an unreadable later page) leaves the review unverified rather than clean.
 Their bodies are untrusted evidence and cannot instruct the fix agent; the [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns that shared handling.
-GitHub's [check runs API](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference) owns the check fields; CodeRabbit documents its [GitHub check](https://docs.coderabbit.ai/platforms/github-com).
+GitHub's [check runs API](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference) owns the check fields; CodeRabbit documents its [GitHub check](https://docs.coderabbit.ai/platforms/github-com). Azure's [commit status API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/statuses/list?view=azure-devops-rest-7.1) binds status to the queried commit and returns `createdBy.id`; CodeRabbit documents its [Azure DevOps completion status](https://docs.coderabbit.ai/platforms/azure-devops).
 
 Missing and in-progress reviews keep readiness false and wait under the existing `ci_timeout` policy.
 Skipped, stale, neutral, failed, cancelled, timed-out, unknown terminal outcomes, and rate-limited reviews remain incomplete and produce `ask-user` findings without spending an automatic repair round.
@@ -821,7 +823,7 @@ That name or output title vetoes completion even alongside another successful ch
 A separately named rate-limit check remains blocking while GitHub still returns it among the latest checks at that head; no-mistakes does not guess from comment text that the limit has cleared.
 The monitor never posts review commands, requests a paid review, or retries a review on the provider's behalf.
 
-Strict gating on GitLab, Bitbucket Cloud/Data Center, Azure DevOps, Gitea, Forgejo, Cursor Origin, and provider plugins remains unsupported and parks with an explicit unsupported finding when enabled. Their documented CodeRabbit integrations expose reviews, comments, approvals, or provider statuses, but not a stable, verified CodeRabbit completion signal tied to the exact current head. GHES is supported only with its instance-local immutable App ID configured as above.
+Strict gating on GitLab remains unsupported: CodeRabbit documents posting MR comments/discussions, and GitLab's Discussions API exposes author IDs, resolution, and `position.head_sha` only for diff notes; neither documents a clean-review completion signal tied to the head. Bitbucket Cloud documents comments, approvals, and build-status events, but not a CodeRabbit review-completion status; its comment/activity API does not bind ordinary review summaries to an exact source commit. Bitbucket Data Center has no documented CodeRabbit status contract. Gitea/Forgejo are absent from CodeRabbit's supported platform list; Azure DevOps Server, Cursor Origin, and arbitrary provider plugins likewise have no documented CodeRabbit completion contract. These platforms park with an explicit unsupported finding when enabled. See [CodeRabbit GitLab docs](https://docs.coderabbit.ai/platforms/gitlab-com), [GitLab Discussions API](https://docs.gitlab.com/api/discussions/), [CodeRabbit Bitbucket Cloud docs](https://docs.coderabbit.ai/platforms/bitbucket-cloud), [Bitbucket Data Center docs](https://docs.coderabbit.ai/platforms/bitbucket-data-center), the [Bitbucket pull request REST API](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-pullrequests/), and CodeRabbit's [supported-platform overview](https://docs.coderabbit.ai/platforms/overview).
 
 This gates no-mistakes readiness, not direct forge merges or merge-queue synthetic commits.
 The merge caller must recheck readiness for the current head and bind its merge request to that SHA.
