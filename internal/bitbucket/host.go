@@ -13,15 +13,23 @@ import (
 
 // Host implements scm.Host for Bitbucket using the REST API client.
 type Host struct {
-	client *Client
-	repo   RepoRef
-	draft  bool // open created PRs as drafts ("draft": true in the create body)
+	client              *Client
+	repo                RepoRef
+	draft               bool // open created PRs as drafts ("draft": true in the create body)
+	requiredReviews     []string
+	requiredReviewBotID string
 }
 
 // NewHost builds a Host from an API client and a parsed repository reference.
 // When draft is true, created PRs are opened as drafts.
 func NewHost(client *Client, repo RepoRef, draft bool) *Host {
 	return &Host{client: client, repo: repo, draft: draft}
+}
+
+func (h *Host) WithRequiredReviews(reviewers []string, botID string) *Host {
+	h.requiredReviews = append([]string(nil), reviewers...)
+	h.requiredReviewBotID = strings.TrimSpace(botID)
+	return h
 }
 
 func (h *Host) Provider() scm.Provider { return scm.ProviderBitbucket }
@@ -90,6 +98,16 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 	if err != nil {
 		return nil, err
 	}
+	var livePR *PullRequest
+	if hasReviewer(h.requiredReviews, "coderabbit") && h.requiredReviewBotID != "" {
+		livePR, err = h.client.GetPR(ctx, h.repo, id)
+		if err != nil {
+			return nil, err
+		}
+		if livePR == nil || strings.TrimSpace(livePR.SourceCommitHash) == "" {
+			return nil, errors.New("Bitbucket pull request has no source head")
+		}
+	}
 	statuses, err := h.client.ListPRStatuses(ctx, h.repo, id)
 	if err != nil {
 		return nil, err
@@ -104,7 +122,68 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 			ExecutionID: pipelineBuildNumberFromStatusURL(status.URL),
 		})
 	}
+	if livePR != nil {
+		pr.ObservedHeadSHA = strings.TrimSpace(livePR.SourceCommitHash)
+		if hasReviewer(h.requiredReviews, "coderabbit") && h.requiredReviewBotID != "" {
+			check, err := h.codeRabbitCheck(ctx, id, pr.ObservedHeadSHA)
+			if err != nil {
+				return nil, err
+			}
+			latest, err := h.client.GetPR(ctx, h.repo, id)
+			if err != nil {
+				return nil, err
+			}
+			if latest == nil || latest.SourceCommitHash != pr.ObservedHeadSHA {
+				return nil, errors.New("Bitbucket pull request head changed during CodeRabbit review read")
+			}
+			checks = append(checks, check)
+		}
+	}
 	return checks, nil
+}
+
+func hasReviewer(reviewers []string, want string) bool {
+	for _, reviewer := range reviewers {
+		if strings.EqualFold(strings.TrimSpace(reviewer), want) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Host) codeRabbitCheck(ctx context.Context, id int, head string) (scm.Check, error) {
+	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: head, AppHost: "bitbucket.org", App: "coderabbitai", Bucket: scm.CheckBucketFail, State: "Review incomplete"}
+	commitDate, err := h.client.GetCommitDate(ctx, h.repo, head)
+	if err != nil {
+		return check, err
+	}
+	if commitDate.IsZero() {
+		return check, errors.New("Bitbucket source commit has no date")
+	}
+	activity, err := h.client.ListPRReviewActivity(ctx, h.repo, id)
+	if err != nil {
+		return check, err
+	}
+	completed := false
+	for _, event := range activity {
+		if event.Comment == nil || event.Comment.User.UUID != h.requiredReviewBotID || event.Comment.Inline.Outdated || !event.Comment.CreatedOn.After(commitDate) {
+			continue
+		}
+		completed = true
+	}
+	tasks, err := h.client.ListPRTasks(ctx, h.repo, id)
+	if err != nil {
+		return check, err
+	}
+	for _, task := range tasks {
+		if task.Creator.UUID == h.requiredReviewBotID && strings.EqualFold(task.State, "OPEN") {
+			return check, nil
+		}
+	}
+	if completed {
+		check.Bucket, check.State = scm.CheckBucketPass, "Review completed"
+	}
+	return check, nil
 }
 
 func (h *Host) GetMergeableState(_ context.Context, _ *scm.PR) (scm.MergeableState, error) {

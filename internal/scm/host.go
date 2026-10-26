@@ -291,9 +291,9 @@ func ReviewBotForCheck(bots []ReviewBot, check Check) (ReviewBot, bool) {
 			if check.AppHost == "github.com" && check.AppID == bot.AppID {
 				return bot, true
 			}
-			// Non-public GitHub instances use local IDs. Only the required-review
-			// adapter may set ExternalReview, after validating its trusted ID.
-			if check.ExternalReview == bot.RequiredReview && check.AppHost != "" && check.AppID > 0 {
+			// A required-review adapter marks its synthesized check only after
+			// validating that forge's trusted app or account identity.
+			if check.ExternalReview == bot.RequiredReview && check.AppHost != "" && (check.AppID > 0 || check.App == bot.AppSlug && check.HeadSHA != "") {
 				return bot, true
 			}
 		} else if check.App != "" && strings.EqualFold(strings.TrimSpace(check.App), bot.AppSlug) {

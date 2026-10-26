@@ -56,6 +56,25 @@ type PipelineStep struct {
 	} `json:"state"`
 }
 
+type bitbucketReviewActivity struct {
+	Comment *struct {
+		CreatedOn time.Time `json:"created_on"`
+		User      struct {
+			UUID string `json:"uuid"`
+		} `json:"user"`
+		Inline struct {
+			Outdated bool `json:"outdated"`
+		} `json:"inline"`
+	} `json:"comment"`
+}
+
+type bitbucketTask struct {
+	State   string `json:"state"`
+	Creator struct {
+		UUID string `json:"uuid"`
+	} `json:"creator"`
+}
+
 type Client struct {
 	baseURL    string
 	email      string
@@ -218,6 +237,52 @@ func (c *Client) ListPRStatuses(ctx context.Context, repo RepoRef, prID int) ([]
 		next = response.Next
 	}
 	return statuses, nil
+}
+
+func (c *Client) ListPRReviewActivity(ctx context.Context, repo RepoRef, prID int) ([]bitbucketReviewActivity, error) {
+	return listPRValues[bitbucketReviewActivity](ctx, c, fmt.Sprintf("%s/%d/activity", repoPRPath(repo), prID))
+}
+
+func (c *Client) ListPRTasks(ctx context.Context, repo RepoRef, prID int) ([]bitbucketTask, error) {
+	return listPRValues[bitbucketTask](ctx, c, fmt.Sprintf("%s/%d/tasks", repoPRPath(repo), prID))
+}
+
+func listPRValues[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+	next := c.baseURL + path
+	var values []T
+	for next != "" {
+		var page struct {
+			Values []T    `json:"values"`
+			Next   string `json:"next"`
+		}
+		if err := c.doJSONPathOrURL(ctx, http.MethodGet, next, nil, &page); err != nil {
+			return nil, err
+		}
+		if page.Values == nil {
+			return nil, fmt.Errorf("decode Bitbucket pull request page: expected values array")
+		}
+		values = append(values, page.Values...)
+		if page.Next == "" {
+			break
+		}
+		validated, err := c.validatePaginationURL(page.Next)
+		if err != nil {
+			return nil, err
+		}
+		next = validated
+	}
+	return values, nil
+}
+
+func (c *Client) GetCommitDate(ctx context.Context, repo RepoRef, sha string) (time.Time, error) {
+	var commit struct {
+		Date time.Time `json:"date"`
+	}
+	path := fmt.Sprintf("/2.0/repositories/%s/%s/commit/%s", repo.Workspace, repo.RepoSlug, url.PathEscape(sha))
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &commit); err != nil {
+		return time.Time{}, err
+	}
+	return commit.Date, nil
 }
 
 func (c *Client) ListPipelinesByCommit(ctx context.Context, repo RepoRef, commitSHA string) ([]Pipeline, error) {

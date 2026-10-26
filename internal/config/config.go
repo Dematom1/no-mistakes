@@ -785,7 +785,7 @@ type CI struct {
 	RequiredReviews []string
 	// RequiredReviewAppID pins the host-local CodeRabbit GitHub App identity (GHES only).
 	RequiredReviewAppID int64
-	// RequiredReviewBotID pins the Azure DevOps CodeRabbit service identity.
+	// RequiredReviewBotID pins the CodeRabbit account identity on Azure DevOps, GitLab, or Bitbucket Cloud.
 	RequiredReviewBotID string
 
 	// RerunTransient is how many times the CI step may re-run a single check
