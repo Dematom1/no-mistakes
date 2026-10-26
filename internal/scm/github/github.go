@@ -1650,7 +1650,7 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 				if page.Nodes == nil {
 					return nil, errors.New("PR review comments response did not contain thread comments")
 				}
-				comments = appendReviewBotComments(comments, page, h.host)
+				comments = appendReviewBotComments(comments, page, h.host, h.requiredReviewAppID)
 				if !page.PageInfo.HasNextPage {
 					break
 				}
@@ -1707,28 +1707,35 @@ func (h *Host) getReviewThreadComments(ctx context.Context, threadID, cursor str
 	return *response.Data.Node.Comments, nil
 }
 
-func appendReviewBotComments(comments []scm.ReviewComment, page reviewCommentConnection, host string) []scm.ReviewComment {
+func appendReviewBotComments(comments []scm.ReviewComment, page reviewCommentConnection, host string, requiredReviewAppID int64) []scm.ReviewComment {
 	for _, raw := range page.Nodes {
 		if raw.Author == nil || !scm.IsReviewBotLogin(scm.ProviderGitHub, raw.Author.Login) {
 			continue
 		}
 		bot, _ := scm.ReviewBotForLogin(scm.ProviderGitHub, raw.Author.Login)
-		if bot.AuthorID != 0 && (host != "github.com" || raw.Author.ID != bot.AuthorID) {
-			continue
+		if bot.AuthorID != 0 {
+			wantID := bot.AuthorID
+			if !strings.EqualFold(host, "github.com") {
+				wantID = requiredReviewAppID
+			}
+			if wantID <= 0 || raw.Author.ID != wantID {
+				continue
+			}
 		}
 		line := 0
 		if raw.Line != nil {
 			line = *raw.Line
 		}
 		comments = append(comments, scm.ReviewComment{
-			ID:        strconv.FormatInt(raw.ID, 10),
-			Author:    raw.Author.Login,
-			AuthorID:  raw.Author.ID,
-			Path:      raw.Path,
-			Line:      line,
-			Body:      raw.Body,
-			CreatedAt: raw.CreatedAt,
-			URL:       raw.URL,
+			VerifiedAuthor: bot.RequiredReview != "" && !strings.EqualFold(host, "github.com"),
+			ID:             strconv.FormatInt(raw.ID, 10),
+			Author:         raw.Author.Login,
+			AuthorID:       raw.Author.ID,
+			Path:           raw.Path,
+			Line:           line,
+			Body:           raw.Body,
+			CreatedAt:      raw.CreatedAt,
+			URL:            raw.URL,
 		})
 	}
 	return comments

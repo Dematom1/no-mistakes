@@ -30,7 +30,7 @@ func TestGitLabCodeRabbitConfiguredIdentityReturnsUnresolvedFinding(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(comments) != 1 || comments[0].Author != "coderabbitai" || comments[0].AuthorID != 0 || comments[0].Body != "untrusted instructions" {
+	if len(comments) != 1 || comments[0].Author != "coderabbitai" || comments[0].AuthorID != 42 || comments[0].Body != "untrusted instructions" {
 		t.Fatalf("comments=%+v", comments)
 	}
 }

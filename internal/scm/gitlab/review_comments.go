@@ -145,17 +145,18 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 			}
 			author, authorID := note.Author.Username, note.Author.ID
 			if h.requiredReviewBotID != "" && strconv.FormatInt(note.Author.ID, 10) == h.requiredReviewBotID {
-				author, authorID = "coderabbitai", 0 // ID was verified at the provider boundary; GitHub's global ID does not apply here.
+				author = "coderabbitai" // ID was verified at the provider boundary; preserve the instance-local ID.
 			}
 			comments = append(comments, scm.ReviewComment{
-				ID:        id,
-				AuthorID:  authorID,
-				Author:    author,
-				Path:      path,
-				Line:      line,
-				Body:      note.Body,
-				CreatedAt: note.CreatedAt,
-				URL:       reviewCommentURL(pr, note.ID),
+				VerifiedAuthor: h.requiredReviewBotID != "" && strconv.FormatInt(note.Author.ID, 10) == h.requiredReviewBotID,
+				ID:             id,
+				AuthorID:       authorID,
+				Author:         author,
+				Path:           path,
+				Line:           line,
+				Body:           note.Body,
+				CreatedAt:      note.CreatedAt,
+				URL:            reviewCommentURL(pr, note.ID),
 			})
 		}
 	}
@@ -219,7 +220,8 @@ func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check
 	if h.requiredReviewBotID == "" || !containsReviewer(h.requiredReviews, "coderabbit") || h.projectPath == "" {
 		return scm.Check{}, false, nil
 	}
-	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: strings.TrimSpace(pr.HeadSHA), AppHost: h.host, App: "coderabbitai", Bucket: scm.CheckBucketFail, State: "Review incomplete"}
+	accountID, _ := strconv.ParseInt(h.requiredReviewBotID, 10, 64)
+	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: strings.TrimSpace(pr.HeadSHA), AppHost: h.host, App: "coderabbitai", AppID: accountID, Bucket: scm.CheckBucketPending, State: "Review incomplete"}
 	if check.AppHost == "" {
 		check.AppHost = "gitlab"
 	}
@@ -247,6 +249,7 @@ func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check
 	if pushedAt.IsZero() {
 		return check, true, nil
 	}
+	check.Bucket = scm.CheckBucketFail
 	discussionArgs := []string{"api", "--paginate", fmt.Sprintf("projects/%s/merge_requests/%s/discussions?per_page=100", encodeProjectPath(h.projectPath), pr.Number)}
 	if h.host != "" {
 		discussionArgs = append(discussionArgs, "--hostname", h.host)

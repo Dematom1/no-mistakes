@@ -152,7 +152,7 @@ func hasReviewer(reviewers []string, want string) bool {
 }
 
 func (h *Host) codeRabbitCheck(ctx context.Context, id int, head string) (scm.Check, error) {
-	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: head, AppHost: "bitbucket.org", App: "coderabbitai", Bucket: scm.CheckBucketFail, State: "Review incomplete"}
+	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: head, AppHost: "bitbucket.org", App: "coderabbitai", Bucket: scm.CheckBucketPending, State: "Review incomplete"}
 	commitDate, err := h.client.GetCommitDate(ctx, h.repo, head)
 	if err != nil {
 		return check, err
@@ -160,6 +160,7 @@ func (h *Host) codeRabbitCheck(ctx context.Context, id int, head string) (scm.Ch
 	if commitDate.IsZero() {
 		return check, errors.New("Bitbucket source commit has no date")
 	}
+	check.Bucket = scm.CheckBucketFail
 	activity, err := h.client.ListPRReviewActivity(ctx, h.repo, id)
 	if err != nil {
 		return check, err

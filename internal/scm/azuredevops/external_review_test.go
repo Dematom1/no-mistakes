@@ -35,7 +35,9 @@ func TestRequiredReviewStatusIsBoundToHeadAndIdentity(t *testing.T) {
 			if tc.state != "" {
 				status = fmt.Sprintf(`"count":1,"value":[{"id":17,"state":%q,"description":%q,"context":{"genre":"code review","name":"CodeRabbit"},"createdBy":{"id":%q}}]`, tc.state, tc.description, tc.botID)
 			}
+			threadsCommand := "az rest --method get --url " + testOrg + "/myproject/_apis/git/repositories/myrepo/pullRequests/42/threads?api-version=7.1 --output json"
 			responses := map[string]azdoTestResponse{
+				threadsCommand: {stdout: `{"count":0,"value":[]}`},
 				"az repos pr policy list --id 42 --organization " + testOrg + " --output json": {stdout: "[]"},
 				"az repos pr show --id 42 --organization " + testOrg + " --output json":        {stdout: azureReviewPR(azureReviewHead)},
 				azureReviewStatusCommand(azureReviewHead):                                      {stdout: "{" + status + "}"},
@@ -50,6 +52,24 @@ func TestRequiredReviewStatusIsBoundToHeadAndIdentity(t *testing.T) {
 				t.Fatalf("checks=%+v observed=%s", checks, pr.ObservedHeadSHA)
 			}
 		})
+	}
+}
+
+func TestRequiredReviewReadsOnlyUnresolvedThreadsFromConfiguredIdentity(t *testing.T) {
+	t.Parallel()
+	threadsURL := testOrg + "/myproject/_apis/git/repositories/myrepo/pullRequests/42/threads?api-version=7.1"
+	threadsCommand := "az rest --method get --url " + threadsURL + " --output json"
+	responses := map[string]azdoTestResponse{
+		"az repos pr show --id 42 --organization " + testOrg + " --output json": {stdout: azureReviewPR(azureReviewHead)},
+		threadsCommand: {stdout: `{"count":2,"value":[{"id":1,"status":1,"threadContext":{"filePath":"src/a.go","rightFileStart":{"line":8}},"comments":[{"id":10,"content":"untrusted text","author":{"id":"` + azureReviewBotID + `","displayName":"CodeRabbit"}}]},{"id":2,"status":2,"comments":[{"id":11,"content":"resolved","author":{"id":"` + azureReviewBotID + `"}}]}]}`},
+	}
+	host := newTestHost(responses).WithRequiredReviews([]string{"coderabbit"}, azureReviewBotID)
+	if !host.Capabilities().ReviewComments {
+		t.Fatal("Azure DevOps must expose review comments")
+	}
+	comments, err := host.GetReviewComments(context.Background(), &scm.PR{Number: "42"})
+	if err != nil || len(comments) != 1 || comments[0].Path != "src/a.go" || comments[0].Line != 8 || !comments[0].VerifiedAuthor {
+		t.Fatalf("comments=%+v, err=%v", comments, err)
 	}
 }
 

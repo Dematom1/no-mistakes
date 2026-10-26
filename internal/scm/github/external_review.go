@@ -216,7 +216,11 @@ func (h *Host) requiredReviewChecks(ctx context.Context, pr *scm.PR, reviewer st
 			return nil, err
 		}
 		for _, comment := range comments {
-			if comment.AuthorID == scm.CodeRabbitAuthorID {
+			wantAuthorID := scm.CodeRabbitAuthorID
+			if !strings.EqualFold(h.host, "github.com") {
+				wantAuthorID = h.requiredReviewAppID
+			}
+			if wantAuthorID > 0 && comment.AuthorID == wantAuthorID {
 				check.Bucket = scm.CheckBucketFail
 				check.State = "UNRESOLVED_FINDINGS"
 				break

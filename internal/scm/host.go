@@ -406,7 +406,8 @@ func CombineFailedCheckLogs(logs []FailedCheckLog) (string, error) {
 }
 
 type ReviewComment struct {
-	AuthorID int64
+	AuthorID       int64
+	VerifiedAuthor bool
 
 	ID        string
 	Author    string
