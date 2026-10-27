@@ -1561,6 +1561,10 @@ func normalizeCheckBucket(bucket, state string) scm.CheckBucket {
 
 // GetReviewComments implements scm.ReviewCommentsHost.
 func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewComment, error) {
+	return h.getReviewComments(ctx, pr, 0)
+}
+
+func (h *Host) getReviewComments(ctx context.Context, pr *scm.PR, verifiedBotUserID int64) ([]scm.ReviewComment, error) {
 	if pr == nil {
 		return nil, errors.New("pr is nil")
 	}
@@ -1650,7 +1654,7 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 				if page.Nodes == nil {
 					return nil, errors.New("PR review comments response did not contain thread comments")
 				}
-				comments = appendReviewBotComments(comments, page, h.host, h.requiredReviewAppID)
+				comments = appendReviewBotComments(comments, page, h.host, verifiedBotUserID)
 				if !page.PageInfo.HasNextPage {
 					break
 				}
@@ -1707,7 +1711,7 @@ func (h *Host) getReviewThreadComments(ctx context.Context, threadID, cursor str
 	return *response.Data.Node.Comments, nil
 }
 
-func appendReviewBotComments(comments []scm.ReviewComment, page reviewCommentConnection, host string, requiredReviewAppID int64) []scm.ReviewComment {
+func appendReviewBotComments(comments []scm.ReviewComment, page reviewCommentConnection, host string, verifiedBotUserID int64) []scm.ReviewComment {
 	for _, raw := range page.Nodes {
 		if raw.Author == nil || !scm.IsReviewBotLogin(scm.ProviderGitHub, raw.Author.Login) {
 			continue
@@ -1716,7 +1720,7 @@ func appendReviewBotComments(comments []scm.ReviewComment, page reviewCommentCon
 		if bot.AuthorID != 0 {
 			wantID := bot.AuthorID
 			if !strings.EqualFold(host, "github.com") {
-				wantID = requiredReviewAppID
+				wantID = verifiedBotUserID
 			}
 			if wantID <= 0 || raw.Author.ID != wantID {
 				continue

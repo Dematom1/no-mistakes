@@ -34,6 +34,7 @@ type reviewCompletion struct {
 	State      reviewState
 	CheckIDs   []string
 	AppID      int64
+	AuthorID   int64
 	CheckNames []string
 }
 
@@ -97,7 +98,8 @@ func (h *Host) getExternalReview(ctx context.Context, pr *scm.PR, reviewer strin
 			Status     string `json:"status"`
 			Conclusion string `json:"conclusion"`
 			App        struct {
-				ID int64 `json:"id"`
+				ID   int64  `json:"id"`
+				Slug string `json:"slug"`
 			} `json:"app"`
 			Output struct {
 				Title string `json:"title"`
@@ -112,6 +114,7 @@ func (h *Host) getExternalReview(ctx context.Context, pr *scm.PR, reviewer strin
 	}
 	result.State = reviewCompletionMissing
 	found, pending, incomplete, limited, count := false, false, false, false, 0
+	appSlug := ""
 	seen := map[int64]bool{}
 	for _, page := range pages {
 		if page.Total == nil || page.Runs == nil {
@@ -136,6 +139,10 @@ func (h *Host) getExternalReview(ctx context.Context, pr *scm.PR, reviewer strin
 				continue
 			}
 			found = true
+			if run.App.Slug == "" {
+				return result, fmt.Errorf("external review app slug could not be verified")
+			}
+			appSlug = run.App.Slug
 			switch run.Status {
 			case "queued", "in_progress", "waiting", "pending", "requested":
 				pending = true
@@ -164,6 +171,21 @@ func (h *Host) getExternalReview(ctx context.Context, pr *scm.PR, reviewer strin
 		result.State = reviewCompletionPending
 	case found:
 		result.State = reviewCompletionComplete
+		if !strings.EqualFold(h.host, "github.com") {
+			authorOut, err := h.cmd(ctx, "gh", "api", "--hostname", h.host, "users/"+url.PathEscape(appSlug+"[bot]")).CombinedOutput()
+			if err != nil {
+				return result, fmt.Errorf("resolve instance CodeRabbit user: %s: %w", strings.TrimSpace(string(authorOut)), err)
+			}
+			var author struct {
+				ID int64 `json:"id"`
+			}
+			if err := json.Unmarshal(authorOut, &author); err != nil || author.ID <= 0 {
+				return result, fmt.Errorf("resolve instance CodeRabbit user identity")
+			}
+			result.AuthorID = author.ID
+		} else {
+			result.AuthorID = scm.CodeRabbitAuthorID
+		}
 	}
 	return result, nil
 }
@@ -211,16 +233,12 @@ func (h *Host) requiredReviewChecks(ctx context.Context, pr *scm.PR, reviewer st
 		check.Bucket = scm.CheckBucketPending
 	case reviewCompletionComplete:
 		check.Bucket = scm.CheckBucketPass
-		comments, err := h.GetReviewComments(ctx, pr)
+		comments, err := h.getReviewComments(ctx, pr, review.AuthorID)
 		if err != nil {
 			return nil, err
 		}
 		for _, comment := range comments {
-			wantAuthorID := scm.CodeRabbitAuthorID
-			if !strings.EqualFold(h.host, "github.com") {
-				wantAuthorID = h.requiredReviewAppID
-			}
-			if wantAuthorID > 0 && comment.AuthorID == wantAuthorID {
+			if review.AuthorID > 0 && comment.AuthorID == review.AuthorID {
 				check.Bucket = scm.CheckBucketFail
 				check.State = "UNRESOLVED_FINDINGS"
 				break

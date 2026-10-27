@@ -16,7 +16,7 @@ const reviewHeadCommand = "gh pr view 42 --repo test/repo --json headRefOid --jq
 const reviewChecksCommand = "gh api --hostname github.com --method GET repos/test/repo/commits/" + reviewHead + "/check-runs -f app_id=347564 -f filter=latest -f per_page=100 --paginate --slurp"
 
 func reviewRun() map[string]any {
-	return map[string]any{"id": 101, "name": "CodeRabbit", "head_sha": reviewHead, "status": "completed", "conclusion": "success", "app": map[string]any{"id": 347564}, "output": map[string]any{"title": "Review completed"}}
+	return map[string]any{"id": 101, "name": "CodeRabbit", "head_sha": reviewHead, "status": "completed", "conclusion": "success", "app": map[string]any{"id": 347564, "slug": "coderabbitai"}, "output": map[string]any{"title": "Review completed"}}
 }
 func reviewPage(runs ...map[string]any) string {
 	if runs == nil {
@@ -168,13 +168,29 @@ func TestExternalReviewGHESRequiresPinnedInstanceAppID(t *testing.T) {
 	const appID = int64(987)
 	checkCommand := "gh api --hostname ghe.example.com --method GET repos/test/repo/commits/" + reviewHead + "/check-runs -f app_id=987 -f filter=latest -f per_page=100 --paginate --slurp"
 	run := reviewRun()
-	run["app"] = map[string]any{"id": appID}
+	run["app"] = map[string]any{"id": appID, "slug": "coderabbitai"}
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
 		reviewHeadCommand: {stdout: reviewHead}, checkCommand: {stdout: reviewPage(run)},
+		"gh api --hostname ghe.example.com users/coderabbitai%5Bbot%5D": {stdout: `{"id":12345}`},
 	}), nil, "ghe.example.com", "test/repo").WithRequiredReviews([]string{"coderabbit"}, appID)
 	got, err := host.getExternalReview(context.Background(), &scm.PR{Number: "42", HeadSHA: reviewHead}, "coderabbit")
-	if err != nil || got.State != reviewCompletionComplete || got.AppID != appID {
+	if err != nil || got.State != reviewCompletionComplete || got.AppID != appID || got.AuthorID != 12345 {
 		t.Fatalf("GHES review = %+v, %v", got, err)
+	}
+}
+
+func TestExternalReviewGHESIdentityLookupFailureIsIncomplete(t *testing.T) {
+	t.Parallel()
+	const appID = int64(987)
+	run := reviewRun()
+	run["app"] = map[string]any{"id": appID, "slug": "coderabbitai"}
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		reviewHeadCommand: {stdout: reviewHead},
+		"gh api --hostname ghe.example.com --method GET repos/test/repo/commits/" + reviewHead + "/check-runs -f app_id=987 -f filter=latest -f per_page=100 --paginate --slurp": {stdout: reviewPage(run)},
+		"gh api --hostname ghe.example.com users/coderabbitai%5Bbot%5D": {stderr: "not found", code: 1},
+	}), nil, "ghe.example.com", "test/repo").WithRequiredReviews([]string{"coderabbit"}, appID)
+	if _, err := host.getExternalReview(context.Background(), &scm.PR{Number: "42", HeadSHA: reviewHead}, "coderabbit"); err == nil {
+		t.Fatal("failed bot identity lookup certified review")
 	}
 }
 
@@ -213,11 +229,12 @@ func TestCodeRabbitReviewCommentsUseConfiguredGHESIdentity(t *testing.T) {
 		id   int64
 		want int
 	}{
-		{name: "configured identity blocks", id: instanceID, want: 1},
-		{name: "wrong identity is ignored", id: 136622811, want: 0},
+		{name: "verified user identity blocks", id: 12345, want: 1},
+		{name: "app ID is not user identity", id: instanceID, want: 0},
+		{name: "similar login wrong identity ignored", id: 136622811, want: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			comments := appendReviewBotComments(nil, page(tc.id), "ghe.example.com", instanceID)
+			comments := appendReviewBotComments(nil, page(tc.id), "ghe.example.com", 12345)
 			if len(comments) != tc.want {
 				t.Fatalf("comments=%+v, want %d", comments, tc.want)
 			}
