@@ -40,6 +40,15 @@ var prContentSchema = json.RawMessage(`{
 	"type": "object",
 	"properties": {
 		"title": {"type": "string", "description": "Concise pull request title following repository configuration"},
+		"body": {"type": "string", "description": "GitHub-flavored markdown body starting with ## What Changed. Plain text, NOT JSON."}
+	},
+	"required": ["title", "body"]
+}`)
+
+var prContentBriefSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"title": {"type": "string", "description": "Concise pull request title following repository configuration"},
 		"body": {"type": "string", "description": "GitHub-flavored markdown body starting with ## What Changed. Plain text, NOT JSON."},
 		"intent_brief": {
 			"type": "object", "properties": {
@@ -54,6 +63,14 @@ var prContentSchema = json.RawMessage(`{
 }`)
 
 var prTitleSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"title": {"type": "string", "description": "Bare concise pull request title text"}
+	},
+	"required": ["title"]
+}`)
+
+var prTitleBriefSchema = json.RawMessage(`{
 	"type": "object",
 	"properties": {
 		"title": {"type": "string", "description": "Bare concise pull request title text"},
@@ -572,10 +589,14 @@ Final diff paths and statuses:
 	prompt += prBodyBudgetPromptSection(bodyLimit)
 	prompt += agent.MemoryFilesRule
 
+	schema := prContentSchema
+	if needsPRIntentBrief(sctx) {
+		schema = prContentBriefSchema
+	}
 	result, err := sctx.RunAgentContext(ctx, agent.RunOpts{
 		Prompt:     prompt,
 		CWD:        sctx.WorkDir,
-		JSONSchema: prContentSchema,
+		JSONSchema: schema,
 		OnChunk:    sctx.LogChunk,
 	})
 	if err != nil {
@@ -643,10 +664,14 @@ Final diff paths and statuses:
 %s%s%s`, branch, baseSHA, sctx.Run.HeadSHA, baseBranch, inventory, prDraftIntentPromptSection(sctx), executionContextPromptSection(sctx.WorkDir))
 	prompt += prIntentBriefPromptSection(sctx)
 	prompt += agent.MemoryFilesRule
+	schema := prTitleSchema
+	if needsPRIntentBrief(sctx) {
+		schema = prTitleBriefSchema
+	}
 	result, err := sctx.RunAgentContext(sctx.Ctx, agent.RunOpts{
 		Prompt:     prompt,
 		CWD:        sctx.WorkDir,
-		JSONSchema: prTitleSchema,
+		JSONSchema: schema,
 		OnChunk:    sctx.LogChunk,
 	})
 	if err != nil {

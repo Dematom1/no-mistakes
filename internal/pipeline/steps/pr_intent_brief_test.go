@@ -8,6 +8,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -37,13 +38,22 @@ func TestPRStep_BriefIsSeparateFromStoredIntent(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	const source = "Add the feature; internal apply run 123 and operator title are not reviewer context."
 	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if !strings.Contains(opts.Prompt, source) || !strings.Contains(opts.Prompt, "intent_brief") {
-			t.Fatalf("PR draft prompt lacks original review criteria or separate brief instruction: %s", opts.Prompt)
+		if !strings.Contains(opts.Prompt, source) || !strings.Contains(opts.Prompt, "intent_brief") || !strings.Contains(string(opts.JSONSchema), "intent_brief") {
+			t.Fatalf("PR draft prompt or schema lacks original review criteria or separate brief contract: %s", opts.Prompt)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"title":"feat: add validation","body":"## What Changed\n\n- Add validation","intent_brief":{"goal":"Validate the submitted change","why":["Catch mistakes before execution"],"scope":["Check configured terms"],"out_of_scope":["Keep the default behavior unchanged"]}}`)}, nil
 	}}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
-	sctx.UserIntent = source
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	repo, err := sctx.DB.InsertRepo(dir, "https://github.com/test/repo", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentRecord := &db.RunIntent{Summary: source, Source: db.RunIntentSourceAgent, SessionID: "review-session", Score: 1}
+	run, err := sctx.DB.InsertRunWithIntentAndLaunchNonce(repo.ID, "refs/heads/feature", headSHA, baseSHA, intentRecord, "launch-nonce", "validation-generation", "immutable-intent-digest", "", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx.Repo, sctx.Run, sctx.UserIntent = repo, run, source
 	sctx.Config.PR.Intent.Format = "brief"
 	sctx.Config.PR.Intent.Sections = []string{"why", "scope", "out_of_scope"}
 	insertCompletedStep(t, sctx, types.StepReview, "", "")
@@ -69,8 +79,12 @@ func TestPRStep_BriefIsSeparateFromStoredIntent(t *testing.T) {
 	if strings.Count(content.Body, "## Intent") != 1 || strings.Count(content.Body, pipelineAttestationCommentPrefix) != 1 {
 		t.Fatalf("Intent/attestation count is wrong:\n%s", content.Body)
 	}
-	if sctx.UserIntent != source {
-		t.Fatalf("draft changed review intent: got %q, want %q", sctx.UserIntent, source)
+	storedAfter, err := sctx.DB.GetRun(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sctx.UserIntent != source || storedAfter.Intent == nil || *storedAfter.Intent != source || storedAfter.IntentSource == nil || *storedAfter.IntentSource != db.RunIntentSourceAgent || storedAfter.IntentSessionID == nil || *storedAfter.IntentSessionID != "review-session" || storedAfter.IntentScore == nil || *storedAfter.IntentScore != 1 || storedAfter.LaunchNonce == nil || *storedAfter.LaunchNonce != "launch-nonce" || storedAfter.LaunchValidationGeneration == nil || *storedAfter.LaunchValidationGeneration != "validation-generation" || storedAfter.LaunchIntentDigest == nil || *storedAfter.LaunchIntentDigest != "immutable-intent-digest" {
+		t.Fatalf("PR drafting changed stored intent, provenance, or launch digest: context=%q stored=%+v", sctx.UserIntent, storedAfter)
 	}
 }
 
@@ -82,8 +96,8 @@ func TestPRStep_TemplatePublishesTheSameStructuredBrief(t *testing.T) {
 	sctx.Config.PR.Intent.Format = "brief"
 	sctx.Config.PR.Intent.Sections = []string{"scope", "why"}
 	ag.runFn = func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if !strings.Contains(opts.Prompt, source) || !strings.Contains(opts.Prompt, "intent_brief") {
-			t.Fatalf("template prompt lacks original criteria or brief instruction: %s", opts.Prompt)
+		if !strings.Contains(opts.Prompt, source) || !strings.Contains(opts.Prompt, "intent_brief") || !strings.Contains(string(opts.JSONSchema), "intent_brief") {
+			t.Fatalf("template prompt or schema lacks original criteria or brief contract: %s", opts.Prompt)
 		}
 		payload, err := json.Marshal(prContent{
 			Title: "feat: fill template",
@@ -109,6 +123,31 @@ func TestPRStep_TemplatePublishesTheSameStructuredBrief(t *testing.T) {
 	}
 	if strings.Contains(content.Body, source) || strings.Count(content.Body, "## Intent") != 1 || strings.Count(content.Body, pipelineAttestationCommentPrefix) != 1 {
 		t.Fatalf("template publication leaked source or duplicated managed sections:\n%s", content.Body)
+	}
+}
+
+func TestPRStep_BriefPublicationPolicySkipsGeneration(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	const source = "source text remains drafting context under repository publication policy"
+	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if !strings.Contains(opts.Prompt, source) || strings.Contains(opts.Prompt, "intent_brief") {
+			t.Fatalf("repository omission changed legacy prompt context or requested a brief: %s", opts.Prompt)
+		}
+		return &agent.Result{Output: json.RawMessage(`{"title":"feat: add validation","body":"## What Changed\n\n- Add validation"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.UserIntent = source
+	sctx.Config.PR.Intent.Format = "brief"
+	publish := false
+	sctx.Config.PR.PublishIntent = &publish
+
+	content, err := (&PRStep{}).buildPRContent(sctx, "feature", "main", baseSHA, scm.ProviderGitHub, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content.Body, "## Intent") || strings.Contains(content.Body, source) {
+		t.Fatalf("trusted publication policy leaked Intent into the body:\n%s", content.Body)
 	}
 }
 
@@ -140,6 +179,31 @@ func TestPRStep_OwnedAppendixDraftsBriefWithoutReplacingAuthorNarrative(t *testi
 	}
 	if strings.Contains(appendix, source) || strings.Count(appendix, "## Intent") != 1 || strings.Count(appendix, pipelineAttestationCommentPrefix) != 1 {
 		t.Fatalf("owned appendix leaked source or duplicated managed sections:\n%s", appendix)
+	}
+}
+
+func TestPRStep_ConfiguredTitleTurnAlsoReturnsBrief(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	const source = "Keep the full launch request as review criteria."
+	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if !strings.Contains(opts.Prompt, source) || !strings.Contains(string(opts.JSONSchema), "intent_brief") {
+			t.Fatalf("configured title turn lacks source or brief contract: %s", opts.Prompt)
+		}
+		return &agent.Result{Output: json.RawMessage(`{"title":"improve reliability","intent_brief":{"goal":"Improve reliability","scope":["Use the existing validation path"]}}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.UserIntent = source
+	sctx.Config.PR.Intent.Format = "brief"
+	sctx.Config.PR.Intent.Sections = []string{"scope"}
+	sctx.Config.PR.TitleFormat = "{{.Title}}"
+
+	title, err := (&PRStep{}).draftConfiguredPRTitle(sctx, "feature", "main", baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title != "improve reliability" || !strings.Contains(sctx.PublicIntentBrief, "### Scope\n- Use the existing validation path") || strings.Contains(sctx.PublicIntentBrief, source) {
+		t.Fatalf("title/brief output = %q, %q", title, sctx.PublicIntentBrief)
 	}
 }
 

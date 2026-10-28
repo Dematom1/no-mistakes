@@ -24,6 +24,13 @@ var prTemplateH1Line = regexp.MustCompile(`^ {0,3}#(?:[ \t]|$)`)
 var templatePRContentSchema = json.RawMessage(`{
  "type":"object", "properties":{
  "title":{"type":"string","description":"Concise pull request title text"},
+ "body":{"type":"string","description":"Filled repository template as plain Markdown; preserve its top-level ATX # headings in order; best-effort fill applicable sections"}
+ }, "required":["title","body"]
+}`)
+
+var templatePRContentBriefSchema = json.RawMessage(`{
+ "type":"object", "properties":{
+ "title":{"type":"string","description":"Concise pull request title text"},
  "body":{"type":"string","description":"Filled repository template as plain Markdown; preserve its top-level ATX # headings in order; best-effort fill applicable sections"},
  "intent_brief":{"type":"object","properties":{
    "goal":{"type":"string","maxLength":200},
@@ -138,7 +145,11 @@ Final diff paths and statuses:
 %s%s%s`, branch, baseBranch, baseSHA, sctx.Run.HeadSHA, titleRules, scopeRules, quoted, inventory, prDraftIntentPromptSection(sctx), executionContextPromptSection(sctx.WorkDir))
 	prompt += prIntentBriefPromptSection(sctx)
 	prompt += agent.MemoryFilesRule
-	result, err := sctx.RunAgentContext(sctx.Ctx, agent.RunOpts{Prompt: prompt, CWD: sctx.WorkDir, JSONSchema: templatePRContentSchema, OnChunk: sctx.LogChunk})
+	schema := templatePRContentSchema
+	if needsPRIntentBrief(sctx) {
+		schema = templatePRContentBriefSchema
+	}
+	result, err := sctx.RunAgentContext(sctx.Ctx, agent.RunOpts{Prompt: prompt, CWD: sctx.WorkDir, JSONSchema: schema, OnChunk: sctx.LogChunk})
 	if err != nil {
 		return prContent{}, fmt.Errorf("draft pr.template narrative (template will not be replaced by a generic fallback): %w", err)
 	}
