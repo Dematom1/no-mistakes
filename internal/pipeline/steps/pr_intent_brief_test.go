@@ -14,6 +14,41 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
+func hasPRIntentBriefSchema(t *testing.T, raw json.RawMessage) bool {
+	t.Helper()
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unparseable PR output schema: %v", err)
+	}
+	briefRaw, ok := schema.Properties["intent_brief"]
+	if !ok {
+		return false
+	}
+	var brief struct {
+		Properties map[string]struct {
+			Type      string `json:"type"`
+			MaxLength int    `json:"maxLength"`
+			MaxItems  int    `json:"maxItems"`
+			Items     struct {
+				Type      string `json:"type"`
+				MaxLength int    `json:"maxLength"`
+			} `json:"items"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(briefRaw, &brief); err != nil {
+		t.Fatalf("unparseable intent_brief schema: %v", err)
+	}
+	goal, why, scope, out := brief.Properties["goal"], brief.Properties["why"], brief.Properties["scope"], brief.Properties["out_of_scope"]
+	return goal.Type == "string" && goal.MaxLength == 200 &&
+		why.Type == "array" && why.MaxItems == 3 && why.Items.Type == "string" && why.Items.MaxLength == 220 &&
+		scope.Type == "array" && scope.MaxItems == 3 && scope.Items.Type == "string" && scope.Items.MaxLength == 220 &&
+		out.Type == "array" && out.MaxItems == 3 && out.Items.Type == "string" && out.Items.MaxLength == 220 &&
+		len(brief.Required) == 1 && brief.Required[0] == "goal"
+}
+
 func TestRenderPRIntentBriefUsesConfiguredSectionsAndOrder(t *testing.T) {
 	got, err := renderPRIntentBrief(prIntentBrief{
 		Goal:       "Give reviewers a clear migration path",
@@ -38,7 +73,7 @@ func TestPRStep_BriefIsSeparateFromStoredIntent(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	const source = "Add the feature; internal apply run 123 and operator title are not reviewer context."
 	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if !strings.Contains(opts.Prompt, source) || !strings.Contains(opts.Prompt, "intent_brief") || !strings.Contains(string(opts.JSONSchema), "intent_brief") {
+		if !strings.Contains(opts.Prompt, source) || !strings.Contains(opts.Prompt, "intent_brief") || !hasPRIntentBriefSchema(t, opts.JSONSchema) {
 			t.Fatalf("PR draft prompt or schema lacks original review criteria or separate brief contract: %s", opts.Prompt)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"title":"feat: add validation","body":"## What Changed\n\n- Add validation","intent_brief":{"goal":"Validate the submitted change","why":["Catch mistakes before execution"],"scope":["Check configured terms"],"out_of_scope":["Keep the default behavior unchanged"]}}`)}, nil
@@ -96,7 +131,7 @@ func TestPRStep_TemplatePublishesTheSameStructuredBrief(t *testing.T) {
 	sctx.Config.PR.Intent.Format = "brief"
 	sctx.Config.PR.Intent.Sections = []string{"scope", "why"}
 	ag.runFn = func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if !strings.Contains(opts.Prompt, source) || !strings.Contains(opts.Prompt, "intent_brief") || !strings.Contains(string(opts.JSONSchema), "intent_brief") {
+		if !strings.Contains(opts.Prompt, source) || !strings.Contains(opts.Prompt, "intent_brief") || !hasPRIntentBriefSchema(t, opts.JSONSchema) {
 			t.Fatalf("template prompt or schema lacks original criteria or brief contract: %s", opts.Prompt)
 		}
 		payload, err := json.Marshal(prContent{
@@ -187,7 +222,7 @@ func TestPRStep_ConfiguredTitleTurnAlsoReturnsBrief(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	const source = "Keep the full launch request as review criteria."
 	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
-		if !strings.Contains(opts.Prompt, source) || !strings.Contains(string(opts.JSONSchema), "intent_brief") {
+		if !strings.Contains(opts.Prompt, source) || !hasPRIntentBriefSchema(t, opts.JSONSchema) {
 			t.Fatalf("configured title turn lacks source or brief contract: %s", opts.Prompt)
 		}
 		return &agent.Result{Output: json.RawMessage(`{"title":"improve reliability","intent_brief":{"goal":"Improve reliability","scope":["Use the existing validation path"]}}`)}, nil

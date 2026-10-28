@@ -2287,7 +2287,13 @@ func TestPRStep_PromptUsesWhatChanged(t *testing.T) {
 	if !strings.Contains(capturedPrompt, "## What Changed") {
 		t.Errorf("expected prompt to instruct agent to write ## What Changed, got:\n%s", capturedPrompt)
 	}
-	if strings.Contains(capturedSchema, "intent_brief") {
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(capturedSchema), &schema); err != nil {
+		t.Fatalf("unparseable PR output schema: %v", err)
+	}
+	if _, ok := schema.Properties["intent_brief"]; ok {
 		t.Errorf("default raw mode changed the PR output schema: %s", capturedSchema)
 	}
 }
