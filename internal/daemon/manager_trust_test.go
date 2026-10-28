@@ -13,7 +13,45 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 )
+
+func TestLoadRecoveredConfigUsesPinnedIntentCheck(t *testing.T) {
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step { return nil })
+	repo, head := setupTestGitRepo(t, p, d, "recovered-intent-check")
+	gitCmd(t, repo.WorkingPath, "remote", "add", "origin", p.RepoDir(repo.ID))
+	global, err := os.ReadFile(p.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	global = append(global, []byte("\nintent:\n  check:\n    mode: reject\n    terms: [current-policy]\n")...)
+	if err := os.WriteFile(p.ConfigFile(), global, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "main", head, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pinned = `{"mode":"warn","terms":["launch-policy"]}`
+	if err := d.SetRunIntentCheck(run.ID, pinned); err != nil {
+		t.Fatal(err)
+	}
+	run, err = d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := NewRunManager(d, p, nil).loadRecoveredConfig(context.Background(), run, repo, repo.WorkingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Intent.Check.Mode != config.IntentCheckWarn || len(cfg.Intent.Check.Match("launch-policy")) != 1 {
+		t.Fatalf("recovery lost the launch policy: %#v", cfg.Intent.Check)
+	}
+	if got := cfg.Intent.Check.Match("current-policy"); len(got) != 0 {
+		t.Fatalf("recovery adopted changed live policy: %v", got)
+	}
+}
 
 func TestLoadRecoveredConfig_BoundsFetchAndFailsClosed(t *testing.T) {
 	oldTimeout := recoveredConfigFetchTimeout

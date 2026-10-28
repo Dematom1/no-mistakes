@@ -116,6 +116,56 @@ func TestPushReceivedTracksRunTelemetry(t *testing.T) {
 	}
 }
 
+func TestIntentCheckRejectsBeforeSupersedingAndCannotBeSkipped(t *testing.T) {
+	started := make(chan struct{})
+	step := &mockSlowStep{name: types.StepReview, started: started}
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step { return []pipeline.Step{step} })
+	global, err := os.ReadFile(p.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	global = append(global, []byte("\nintent:\n  check:\n    mode: reject\n    terms: [captain-secret]\n")...)
+	if err := os.WriteFile(p.ConfigFile(), global, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo, headSHA := setupTestGitRepo(t, p, d, "intent-check-repo")
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var first ipc.PushReceivedResult
+	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main", Old: headSHA, New: headSHA, Intent: "safe intent",
+	}, &first); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("original run did not start")
+	}
+
+	const rejected = "include the CAPTAIN-SECRET title in this intent"
+	var second ipc.PushReceivedResult
+	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate: p.RepoDir(repo.ID), Ref: "refs/heads/main", Old: headSHA, New: headSHA,
+		Intent: rejected, SkipSteps: []types.StepName{types.StepIntent},
+	}, &second)
+	if err == nil || !strings.Contains(err.Error(), "terms[0]") || strings.Contains(err.Error(), "CAPTAIN-SECRET") {
+		t.Fatalf("intent rejection = %v, want rule index only", err)
+	}
+	active, err := d.GetActiveRun(repo.ID, "main")
+	if err != nil || active == nil || active.ID != first.RunID || active.Status != types.RunRunning {
+		t.Fatalf("rejected launch superseded active run: active=%+v err=%v", active, err)
+	}
+	runs, err := d.GetRunsByRepo(repo.ID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("rejected launch created a run: count=%d err=%v", len(runs), err)
+	}
+}
+
 func TestProofLaunchReceiptBindsIndependentGenerationAndFirstObserver(t *testing.T) {
 	step := &mockPassStep{name: types.StepReview}
 	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step { return []pipeline.Step{step} })

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -304,6 +305,9 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 	allowRepoCommands := trustedRepoCfg != nil && trustedRepoCfg.AllowRepoCommands
 	effectiveRepoCfg := config.EffectiveRepoConfig(repoCfg, trustedRepoCfg, allowRepoCommands)
 	cfg := config.MergeForRemote(globalCfg, effectiveRepoCfg, repo.UpstreamURL)
+	if err := applyPinnedIntentCheck(cfg, run); err != nil {
+		return nil, err
+	}
 	if err := cfg.Review.ValidatePathInstructionsBudget(); err != nil {
 		return nil, err
 	}
@@ -1449,6 +1453,25 @@ func (m *RunManager) validatePiProfileAgentsBeforeCancel(ctx context.Context, re
 	return cfg.ValidatePiProfileAgents()
 }
 
+// applyPinnedIntentCheck makes an existing run keep the policy under which it
+// was admitted. Historical rows without a snapshot remain off rather than
+// acquiring a new admission rule during recovery.
+func applyPinnedIntentCheck(cfg *config.Config, run *db.Run) error {
+	if cfg == nil || run == nil {
+		return fmt.Errorf("cannot restore intent check without run configuration")
+	}
+	if run.IntentCheckJSON == nil {
+		cfg.Intent.Check = config.IntentCheck{Mode: config.IntentCheckOff}
+		return nil
+	}
+	check, err := config.ParseIntentCheckJSON([]byte(*run.IntentCheckJSON))
+	if err != nil {
+		return err
+	}
+	cfg.Intent.Check = check
+	return nil
+}
+
 // effectiveConfigBeforeRun resolves the configuration a run at headSHA would
 // get, from the gate and a privately fetched trusted default branch, before
 // any run is created or superseded. purpose names the caller in errors.
@@ -1573,6 +1596,40 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// their failed-row diagnostics on a bad global config: the load error is
 	// held until the row exists.
 	globalCfg, globalCfgErr := config.LoadGlobal(m.paths.ConfigFile())
+	if globalCfgErr != nil && strings.Contains(globalCfgErr.Error(), "intent.check") {
+		trackStartFailure("intent_check_config")
+		return "", fmt.Errorf("load intent check policy: %w", globalCfgErr)
+	}
+	var admissionConfig *config.Config
+	var intentCheckJSON string
+	if globalCfgErr == nil {
+		var err error
+		admissionConfig, _, err = m.effectiveConfigBeforeRun(ctx, repo, headSHA, globalCfg, "intent check")
+		if err != nil {
+			trackStartFailure("intent_check_config")
+			return "", err
+		}
+		policyIntent := intent
+		if retry != nil && retry.source != nil && retry.source.Intent != nil {
+			policyIntent = *retry.source.Intent
+		}
+		if matches := admissionConfig.Intent.Check.Match(policyIntent); len(matches) > 0 {
+			switch admissionConfig.Intent.Check.Mode {
+			case config.IntentCheckReject:
+				trackStartFailure("intent_check_rejected")
+				return "", fmt.Errorf("intent rejected by configured rules: %s", strings.Join(matches, ", "))
+			case config.IntentCheckWarn:
+				slog.Warn("run intent matched configured rules", "rules", strings.Join(matches, ", "))
+			}
+		}
+		policy, err := json.Marshal(admissionConfig.Intent.Check)
+		if err != nil {
+			trackStartFailure("intent_check_snapshot")
+			return "", fmt.Errorf("serialize intent check policy: %w", err)
+		}
+		intentCheckJSON = string(policy)
+	}
+
 	var pin *agentcfg.PiProfile
 	if request := agentcfg.OptionalPiProfile(profiles); request != nil {
 		if globalCfgErr != nil {
@@ -1585,7 +1642,11 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 			trackStartFailure("invalid_pi_profile")
 			return "", err
 		}
-		if err := m.validatePiProfileAgentsBeforeCancel(ctx, repo, headSHA, globalCfg); err != nil {
+		if admissionConfig == nil {
+			trackStartFailure("invalid_pi_profile")
+			return "", fmt.Errorf("load global config: %w", globalCfgErr)
+		}
+		if err := admissionConfig.ValidatePiProfileAgents(); err != nil {
 			trackStartFailure("invalid_pi_profile")
 			return "", err
 		}
@@ -1640,6 +1701,14 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	if err != nil {
 		trackStartFailure("create_run")
 		return "", fmt.Errorf("create run: %w", err)
+	}
+	if intentCheckJSON != "" {
+		if err := m.db.SetRunIntentCheck(run.ID, intentCheckJSON); err != nil {
+			m.db.UpdateRunError(run.ID, fmt.Sprintf("pin intent check: %s", err))
+			trackStartFailure("pin_intent_check")
+			return "", fmt.Errorf("pin intent check: %w", err)
+		}
+		run.IntentCheckJSON = &intentCheckJSON
 	}
 	if inherited := strings.TrimSpace(inheritedPRURL); inherited != "" {
 		if err := m.db.UpdateRunPRURL(run.ID, inherited); err != nil {
@@ -1780,6 +1849,11 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 		slog.Info("repo commands/agent loaded from default branch, not pushed branch", "run_id", run.ID, "branch", branch, "default_branch", repo.DefaultBranch)
 	}
 	cfg := config.MergeForRemote(globalCfg, effectiveRepoCfg, repo.UpstreamURL)
+	if err := applyPinnedIntentCheck(cfg, run); err != nil {
+		m.db.UpdateRunError(run.ID, err.Error())
+		trackStartFailure("pinned_intent_check")
+		return "", err
+	}
 	if err := cfg.Review.ValidatePathInstructionsBudget(); err != nil {
 		m.db.UpdateRunError(run.ID, err.Error())
 		trackStartFailure("review_path_instructions_budget")

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/intent"
@@ -124,6 +125,18 @@ func (s *IntentStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.Step
 	if result == nil {
 		sctx.Log("no intent attached")
 		return &pipeline.StepOutcome{Skipped: true}, nil
+	}
+
+	if matches := sctx.Config.Intent.Check.Match(result.Summary); len(matches) > 0 {
+		switch sctx.Config.Intent.Check.Mode {
+		case config.IntentCheckReject:
+			outcomeLabel = "rejected"
+			err := fmt.Errorf("inferred intent rejected by configured rules: %s", strings.Join(matches, ", "))
+			sctx.Log(err.Error())
+			return nil, err
+		case config.IntentCheckWarn:
+			slog.Warn("inferred run intent matched configured rules", "run_id", sctx.Run.ID, "rules", strings.Join(matches, ", "))
+		}
 	}
 
 	matchedAgent = result.AgentName
