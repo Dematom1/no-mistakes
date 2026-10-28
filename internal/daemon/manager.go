@@ -1602,32 +1602,13 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	var admissionConfig *config.Config
 	var intentCheckJSON string
-	if globalCfgErr == nil {
+	if globalCfgErr == nil && agentcfg.OptionalPiProfile(profiles) != nil {
 		var err error
-		admissionConfig, _, err = m.effectiveConfigBeforeRun(ctx, repo, headSHA, globalCfg, "intent check")
+		admissionConfig, _, err = m.effectiveConfigBeforeRun(ctx, repo, headSHA, globalCfg, "Pi profile validation")
 		if err != nil {
-			trackStartFailure("intent_check_config")
+			trackStartFailure("invalid_pi_profile")
 			return "", err
 		}
-		policyIntent := intent
-		if retry != nil && retry.source != nil && retry.source.Intent != nil {
-			policyIntent = *retry.source.Intent
-		}
-		if matches := admissionConfig.Intent.Check.Match(policyIntent); len(matches) > 0 {
-			switch admissionConfig.Intent.Check.Mode {
-			case config.IntentCheckReject:
-				trackStartFailure("intent_check_rejected")
-				return "", fmt.Errorf("intent rejected by configured rules: %s", strings.Join(matches, ", "))
-			case config.IntentCheckWarn:
-				slog.Warn("run intent matched configured rules", "rules", strings.Join(matches, ", "))
-			}
-		}
-		policy, err := json.Marshal(admissionConfig.Intent.Check)
-		if err != nil {
-			trackStartFailure("intent_check_snapshot")
-			return "", fmt.Errorf("serialize intent check policy: %w", err)
-		}
-		intentCheckJSON = string(policy)
 	}
 
 	var pin *agentcfg.PiProfile
@@ -1849,10 +1830,37 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 		slog.Info("repo commands/agent loaded from default branch, not pushed branch", "run_id", run.ID, "branch", branch, "default_branch", repo.DefaultBranch)
 	}
 	cfg := config.MergeForRemote(globalCfg, effectiveRepoCfg, repo.UpstreamURL)
+	if run.IntentCheckJSON == nil {
+		policy, err := json.Marshal(cfg.Intent.Check)
+		if err != nil {
+			m.db.UpdateRunError(run.ID, fmt.Sprintf("serialize intent check policy: %s", err))
+			return "", err
+		}
+		if err := m.db.SetRunIntentCheck(run.ID, string(policy)); err != nil {
+			m.db.UpdateRunError(run.ID, fmt.Sprintf("pin intent check: %s", err))
+			return "", fmt.Errorf("pin intent check: %w", err)
+		}
+		policyJSON := string(policy)
+		run.IntentCheckJSON = &policyJSON
+	}
 	if err := applyPinnedIntentCheck(cfg, run); err != nil {
 		m.db.UpdateRunError(run.ID, err.Error())
 		trackStartFailure("pinned_intent_check")
 		return "", err
+	}
+	policyIntent := ""
+	if run.Intent != nil {
+		policyIntent = *run.Intent
+	}
+	if matches := cfg.Intent.Check.Match(policyIntent); len(matches) > 0 {
+		switch cfg.Intent.Check.Mode {
+		case config.IntentCheckReject:
+			m.db.UpdateRunError(run.ID, "intent rejected by configured rules")
+			trackStartFailure("intent_check_rejected")
+			return "", fmt.Errorf("intent rejected by configured rules: %s", strings.Join(matches, ", "))
+		case config.IntentCheckWarn:
+			slog.Warn("run intent matched configured rules", "rules", strings.Join(matches, ", "))
+		}
 	}
 	if err := cfg.Review.ValidatePathInstructionsBudget(); err != nil {
 		m.db.UpdateRunError(run.ID, err.Error())
