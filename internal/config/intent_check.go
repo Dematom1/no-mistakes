@@ -61,8 +61,7 @@ func validateIntentCheckWithLimits(check *IntentCheckRaw, maxRules, maxBytes int
 		check.Terms[i] = term
 	}
 	for i, pattern := range check.Patterns {
-		pattern = strings.TrimSpace(pattern)
-		if pattern == "" || len(pattern) > maxIntentCheckRuleLength {
+		if strings.TrimSpace(pattern) == "" || len(pattern) > maxIntentCheckRuleLength {
 			return fmt.Errorf("intent.check.patterns[%d] must be non-empty and at most %d bytes", i, maxIntentCheckRuleLength)
 		}
 		bytes += len(pattern)
