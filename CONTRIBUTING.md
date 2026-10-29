@@ -16,7 +16,7 @@ Every `opened` or `edited` event gets an independent run, including first-time-f
 - The run's `head_sha` binds the evidence to the reviewed commit. After the latest `opened` or `edited` run reaches `status: completed`, `conclusion: success` means that event's body contained the signature and a parseable v1 pipeline attestation whose `head_sha` matches `github.event.pull_request.head.sha` and whose `review`, `test`, and `document` steps are `completed`. `conclusion: failure` means it did not. `action_required` or `cancelled` is not compliance evidence and must be handled conservatively.
 - Fork runs stay on the `pull_request` boundary with read-only contents permission, no repository secrets, and no checkout or execution of fork code. Approval permits only this body check; it does not grant write authority.
 
-PR titles must follow Conventional Commits (for example, `ci: update checks`).
+The required `PR title` check rejects titles that do not match `feat`, `fix`, `chore`, `ci`, `docs`, `refactor`, `test`, `perf`, `build`, or `revert`, followed by an optional non-empty scope, an optional `!`, a colon and space, and a description (for example, `feat(cli)!: add command`).
 
 ## Workflow
 
