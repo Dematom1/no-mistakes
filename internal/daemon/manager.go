@@ -1596,7 +1596,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// their failed-row diagnostics on a bad global config: the load error is
 	// held until the row exists.
 	storedIntent := intent
-	if source != db.RunIntentSourceRerun && launchNonce == "" {
+	if source != db.RunIntentSourceRerun && launchNonce == "" && planID == "" {
 		storedIntent = strings.TrimSpace(storedIntent)
 	}
 	globalCfg, globalCfgErr := config.LoadGlobal(m.paths.ConfigFile())
