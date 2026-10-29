@@ -3,6 +3,9 @@ name: PR title
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+    paths-ignore:
+      - CHANGELOG.md
+      - .release-please-manifest.json
 
 permissions:
   pull-requests: read
