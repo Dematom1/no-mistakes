@@ -1490,7 +1490,7 @@ func (m *RunManager) effectiveIntentCheckBeforeRun(ctx context.Context, repo *db
 		}
 		trusted, err = config.ParseIntentCheckYAML([]byte(content))
 		if err != nil {
-			return config.IntentCheck{}, fmt.Errorf("cannot evaluate intent check: %w", err)
+			return config.IntentCheck{}, fmt.Errorf("cannot evaluate intent check: trusted .no-mistakes.yaml is invalid: %w", err)
 		}
 	}
 	return config.MergeIntentChecks(global.Intent.Check, trusted), nil
@@ -1628,7 +1628,6 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 		trackStartFailure("intent_check_config")
 		return "", fmt.Errorf("load intent check policy: %w", globalCfgErr)
 	}
-	var admissionConfig *config.Config
 	var intentCheckJSON string
 	if globalCfgErr == nil {
 		var err error
@@ -1674,11 +1673,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 			trackStartFailure("invalid_pi_profile")
 			return "", err
 		}
-		if admissionConfig == nil {
-			trackStartFailure("invalid_pi_profile")
-			return "", fmt.Errorf("load global config: %w", globalCfgErr)
-		}
-		if err := admissionConfig.ValidatePiProfileAgents(); err != nil {
+		if err := m.validatePiProfileAgentsBeforeCancel(ctx, repo, headSHA, globalCfg); err != nil {
 			trackStartFailure("invalid_pi_profile")
 			return "", err
 		}
