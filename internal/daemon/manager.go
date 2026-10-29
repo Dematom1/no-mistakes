@@ -1606,35 +1606,37 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	var admissionConfig *config.Config
 	var intentCheckJSON string
-	if globalCfgErr == nil && globalCfg.Intent.Check.Mode != config.IntentCheckOff {
+	if globalCfgErr == nil {
 		var err error
 		admissionConfig, _, err = m.effectiveConfigBeforeRun(ctx, repo, headSHA, globalCfg, "intent check")
 		if err != nil {
 			trackStartFailure("intent_check_config")
 			return "", err
 		}
-		if matches := admissionConfig.Intent.Check.Match(storedIntent); len(matches) > 0 {
-			switch admissionConfig.Intent.Check.Mode {
-			case config.IntentCheckReject:
-				trackStartFailure("intent_check_rejected")
-				return "", fmt.Errorf("intent rejected by configured rules: %s", strings.Join(matches, ", "))
-			case config.IntentCheckWarn:
-				slog.Warn("run intent matched configured rules", "rules", strings.Join(matches, ", "))
+		// Resolve the effective policy, not just the global mode: a trusted
+		// repository rule must reject before cancelActiveRuns, including retries.
+		check := admissionConfig.Intent.Check
+		if check.Mode != config.IntentCheckOff {
+			policyIntent := storedIntent
+			if retry != nil && retry.source != nil && retry.source.Intent != nil {
+				policyIntent = *retry.source.Intent
+			}
+			if matches := check.Match(policyIntent); len(matches) > 0 {
+				switch check.Mode {
+				case config.IntentCheckReject:
+					trackStartFailure("intent_check_rejected")
+					return "", fmt.Errorf("intent rejected by configured rules: %s", strings.Join(matches, ", "))
+				case config.IntentCheckWarn:
+					slog.Warn("run intent matched configured rules", "rules", strings.Join(matches, ", "))
+				}
 			}
 		}
-		policy, err := json.Marshal(admissionConfig.Intent.Check)
+		policy, err := json.Marshal(check)
 		if err != nil {
+			trackStartFailure("intent_check_snapshot")
 			return "", fmt.Errorf("serialize intent check policy: %w", err)
 		}
 		intentCheckJSON = string(policy)
-	}
-	if globalCfgErr == nil && agentcfg.OptionalPiProfile(profiles) != nil {
-		var err error
-		admissionConfig, _, err = m.effectiveConfigBeforeRun(ctx, repo, headSHA, globalCfg, "Pi profile validation")
-		if err != nil {
-			trackStartFailure("invalid_pi_profile")
-			return "", err
-		}
 	}
 
 	var pin *agentcfg.PiProfile
