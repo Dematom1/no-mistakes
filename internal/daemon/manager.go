@@ -1602,6 +1602,28 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	var admissionConfig *config.Config
 	var intentCheckJSON string
+	if globalCfgErr == nil && globalCfg.Intent.Check.Mode != config.IntentCheckOff {
+		var err error
+		admissionConfig, _, err = m.effectiveConfigBeforeRun(ctx, repo, headSHA, globalCfg, "intent check")
+		if err != nil {
+			trackStartFailure("intent_check_config")
+			return "", err
+		}
+		if matches := admissionConfig.Intent.Check.Match(intent); len(matches) > 0 {
+			switch admissionConfig.Intent.Check.Mode {
+			case config.IntentCheckReject:
+				trackStartFailure("intent_check_rejected")
+				return "", fmt.Errorf("intent rejected by configured rules: %s", strings.Join(matches, ", "))
+			case config.IntentCheckWarn:
+				slog.Warn("run intent matched configured rules", "rules", strings.Join(matches, ", "))
+			}
+		}
+		policy, err := json.Marshal(admissionConfig.Intent.Check)
+		if err != nil {
+			return "", fmt.Errorf("serialize intent check policy: %w", err)
+		}
+		intentCheckJSON = string(policy)
+	}
 	if globalCfgErr == nil && agentcfg.OptionalPiProfile(profiles) != nil {
 		var err error
 		admissionConfig, _, err = m.effectiveConfigBeforeRun(ctx, repo, headSHA, globalCfg, "Pi profile validation")
