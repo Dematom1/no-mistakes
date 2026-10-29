@@ -103,10 +103,25 @@ func (m *RunManager) HandleRetry(ctx context.Context, repoID, branch, runID, cal
 		if err != nil {
 			return "", err
 		}
+		source := launch.source
+		if source.Intent != nil {
+			globalCfg, err := config.LoadGlobal(m.paths.ConfigFile())
+			if err != nil {
+				return "", fmt.Errorf("load intent check policy: %w", err)
+			}
+			if globalCfg.Intent.Check.Mode != config.IntentCheckOff {
+				effective, _, err := m.effectiveConfigBeforeRun(ctx, repo, source.HeadSHA, globalCfg, "intent check")
+				if err != nil {
+					return "", err
+				}
+				if matches := effective.Intent.Check.Match(*source.Intent); len(matches) > 0 && effective.Intent.Check.Mode == config.IntentCheckReject {
+					return "", fmt.Errorf("retry intent rejected by configured rules: %s", strings.Join(matches, ", "))
+				}
+			}
+		}
 		if m.afterRetryProof != nil {
 			m.afterRetryProof()
 		}
-		source := launch.source
 		prBaseBranch := ""
 		if source.PRBaseBranch != nil {
 			prBaseBranch = strings.TrimSpace(*source.PRBaseBranch)

@@ -37,8 +37,8 @@ var templatePRContentBriefSchema = json.RawMessage(`{
    "why":{"type":"array","maxItems":3,"items":{"type":"string","maxLength":220}},
    "scope":{"type":"array","maxItems":3,"items":{"type":"string","maxLength":220}},
    "out_of_scope":{"type":"array","maxItems":3,"items":{"type":"string","maxLength":220}}
- },"required":["goal"],"additionalProperties":false}
- }, "required":["title","body"]
+ },"required":["goal","why","scope","out_of_scope"],"additionalProperties":false}
+ }, "required":["title","body","intent_brief"]
 }`)
 
 func supportsPRTemplates(provider scm.Provider) bool {

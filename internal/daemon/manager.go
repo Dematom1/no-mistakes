@@ -1595,6 +1595,10 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// stamp back instead of a since-changed config file. Legacy launches keep
 	// their failed-row diagnostics on a bad global config: the load error is
 	// held until the row exists.
+	storedIntent := intent
+	if source != db.RunIntentSourceRerun && launchNonce == "" {
+		storedIntent = strings.TrimSpace(storedIntent)
+	}
 	globalCfg, globalCfgErr := config.LoadGlobal(m.paths.ConfigFile())
 	if globalCfgErr != nil && strings.Contains(globalCfgErr.Error(), "intent.check") {
 		trackStartFailure("intent_check_config")
@@ -1609,7 +1613,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 			trackStartFailure("intent_check_config")
 			return "", err
 		}
-		if matches := admissionConfig.Intent.Check.Match(intent); len(matches) > 0 {
+		if matches := admissionConfig.Intent.Check.Match(storedIntent); len(matches) > 0 {
 			switch admissionConfig.Intent.Check.Mode {
 			case config.IntentCheckReject:
 				trackStartFailure("intent_check_rejected")
@@ -1677,10 +1681,6 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// Cancel any active run for this repo+branch.
 	m.cancelActiveRuns(repo.ID, branch)
 
-	storedIntent := intent
-	if source != db.RunIntentSourceRerun && launchNonce == "" && plan == nil {
-		storedIntent = strings.TrimSpace(storedIntent)
-	}
 	var runIntent *db.RunIntent
 	if strings.TrimSpace(storedIntent) != "" {
 		if source == "" {

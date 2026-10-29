@@ -56,10 +56,10 @@ var prContentBriefSchema = json.RawMessage(`{
 				"why": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 220}},
 				"scope": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 220}},
 				"out_of_scope": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 220}}
-			}, "required": ["goal"], "additionalProperties": false
+			}, "required": ["goal", "why", "scope", "out_of_scope"], "additionalProperties": false
 		}
 	},
-	"required": ["title", "body"]
+	"required": ["title", "body", "intent_brief"]
 }`)
 
 var prTitleSchema = json.RawMessage(`{
@@ -80,10 +80,10 @@ var prTitleBriefSchema = json.RawMessage(`{
 				"why": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 220}},
 				"scope": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 220}},
 				"out_of_scope": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 220}}
-			}, "required": ["goal"], "additionalProperties": false
+			}, "required": ["goal", "why", "scope", "out_of_scope"], "additionalProperties": false
 		}
 	},
-	"required": ["title"]
+	"required": ["title", "intent_brief"]
 }`)
 
 const (
@@ -203,15 +203,23 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			var title string
 			if needsPRIntentBrief(sctx) {
 				if template != "" {
-					draft, err := s.draftTemplateNarrative(sctx, branch, baseBranch, baseSHA, template)
-					if err != nil {
-						return nil, err
-					}
 					if live.Body == "" {
+						draft, err := s.draftTemplateNarrative(sctx, branch, baseBranch, baseSHA, template)
+						if err != nil {
+							return nil, err
+						}
 						emptyNarrative = neutralizeAttestationMarkers(provider, draft.Body)
 						title = draft.Title
-					} else if sctx.Config.PR.TitleFormat != "" {
-						title = draft.Title
+					} else {
+						if sctx.Config.PR.TitleFormat != "" {
+							title, err = s.draftConfiguredPRTitle(sctx, branch, baseBranch, baseSHA)
+							if err != nil {
+								return nil, err
+							}
+						}
+						if err := s.draftPRIntentBrief(sctx, branch, baseBranch, baseSHA); err != nil {
+							return nil, err
+						}
 					}
 				} else if sctx.Config != nil && sctx.Config.PR.TitleFormat != "" {
 					title, err = s.draftConfiguredPRTitle(sctx, branch, baseBranch, baseSHA)
