@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -126,6 +128,23 @@ func (check IntentCheckRaw) Match(text string) []string {
 		}
 	}
 	return matches
+}
+
+// ParseIntentCheckYAML reads only the intent policy so unrelated config fields
+// cannot prevent admission from enforcing it.
+func ParseIntentCheckYAML(data []byte) (IntentCheck, error) {
+	var repo struct {
+		Intent struct {
+			Check IntentCheckRaw `yaml:"check"`
+		} `yaml:"intent"`
+	}
+	if err := yaml.Unmarshal(data, &repo); err != nil {
+		return IntentCheck{}, fmt.Errorf("parse intent.check: %w", err)
+	}
+	if err := validateIntentCheck(&repo.Intent.Check); err != nil {
+		return IntentCheck{}, err
+	}
+	return repo.Intent.Check, nil
 }
 
 // ParseIntentCheckJSON validates a policy snapshot loaded from run storage.

@@ -1472,6 +1472,30 @@ func applyPinnedIntentCheck(cfg *config.Config, run *db.Run) error {
 	return nil
 }
 
+func (m *RunManager) effectiveIntentCheckBeforeRun(ctx context.Context, repo *db.Repo, global *config.GlobalConfig) (config.IntentCheck, error) {
+	gateDir := m.paths.RepoDir(repo.ID)
+	trustedSHA, err := fetchTrustedDefaultBranchSHA(ctx, gateDir, repo, "intent check")
+	if err != nil {
+		return config.IntentCheck{}, err
+	}
+	entry, err := git.Run(ctx, gateDir, "ls-tree", trustedSHA, "--", ".no-mistakes.yaml")
+	if err != nil {
+		return config.IntentCheck{}, fmt.Errorf("cannot evaluate intent check: trusted tree is unreadable: %w", err)
+	}
+	trusted := config.IntentCheck{Mode: config.IntentCheckOff}
+	if entry != "" {
+		content, err := git.ShowFile(ctx, gateDir, trustedSHA, ".no-mistakes.yaml")
+		if err != nil {
+			return config.IntentCheck{}, fmt.Errorf("cannot evaluate intent check: trusted config is unreadable: %w", err)
+		}
+		trusted, err = config.ParseIntentCheckYAML([]byte(content))
+		if err != nil {
+			return config.IntentCheck{}, fmt.Errorf("cannot evaluate intent check: %w", err)
+		}
+	}
+	return config.MergeIntentChecks(global.Intent.Check, trusted), nil
+}
+
 // effectiveConfigBeforeRun resolves the configuration a run at headSHA would
 // get, from the gate and a privately fetched trusted default branch, before
 // any run is created or superseded. purpose names the caller in errors.
@@ -1608,14 +1632,13 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	var intentCheckJSON string
 	if globalCfgErr == nil {
 		var err error
-		admissionConfig, _, err = m.effectiveConfigBeforeRun(ctx, repo, headSHA, globalCfg, "intent check")
+		check, err := m.effectiveIntentCheckBeforeRun(ctx, repo, globalCfg)
 		if err != nil {
 			trackStartFailure("intent_check_config")
 			return "", err
 		}
 		// Resolve the effective policy, not just the global mode: a trusted
 		// repository rule must reject before cancelActiveRuns, including retries.
-		check := admissionConfig.Intent.Check
 		if check.Mode != config.IntentCheckOff {
 			policyIntent := storedIntent
 			if retry != nil && retry.source != nil && retry.source.Intent != nil {
