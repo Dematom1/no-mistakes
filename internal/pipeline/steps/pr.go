@@ -216,8 +216,7 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 							if err != nil {
 								return nil, err
 							}
-						}
-						if err := s.draftPRIntentBrief(sctx, branch, baseBranch, baseSHA); err != nil {
+						} else if err := s.draftPRIntentBrief(sctx, branch, baseBranch, baseSHA); err != nil {
 							return nil, err
 						}
 					}

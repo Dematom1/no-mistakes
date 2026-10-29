@@ -18,6 +18,7 @@ func hasPRIntentBriefSchema(t *testing.T, raw json.RawMessage) bool {
 	t.Helper()
 	var schema struct {
 		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
 	}
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		t.Fatalf("unparseable PR output schema: %v", err)
@@ -42,11 +43,19 @@ func hasPRIntentBriefSchema(t *testing.T, raw json.RawMessage) bool {
 		t.Fatalf("unparseable intent_brief schema: %v", err)
 	}
 	goal, why, scope, out := brief.Properties["goal"], brief.Properties["why"], brief.Properties["scope"], brief.Properties["out_of_scope"]
-	return goal.Type == "string" && goal.MaxLength == 200 &&
+	outerRequiresBrief := false
+	for _, field := range schema.Required {
+		outerRequiresBrief = outerRequiresBrief || field == "intent_brief"
+	}
+	innerRequires := map[string]bool{}
+	for _, field := range brief.Required {
+		innerRequires[field] = true
+	}
+	return outerRequiresBrief && goal.Type == "string" && goal.MaxLength == 200 &&
 		why.Type == "array" && why.MaxItems == 3 && why.Items.Type == "string" && why.Items.MaxLength == 220 &&
 		scope.Type == "array" && scope.MaxItems == 3 && scope.Items.Type == "string" && scope.Items.MaxLength == 220 &&
 		out.Type == "array" && out.MaxItems == 3 && out.Items.Type == "string" && out.Items.MaxLength == 220 &&
-		len(brief.Required) == 1 && brief.Required[0] == "goal"
+		innerRequires["goal"] && innerRequires["why"] && innerRequires["scope"] && innerRequires["out_of_scope"]
 }
 
 func TestRenderPRIntentBriefUsesConfiguredSectionsAndOrder(t *testing.T) {
