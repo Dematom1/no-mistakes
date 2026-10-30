@@ -99,7 +99,7 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 		return nil, err
 	}
 	var livePR *PullRequest
-	if hasReviewer(h.requiredReviews, "coderabbit") && h.requiredReviewBotID != "" {
+	if hasReviewer(h.requiredReviews, "coderabbit") {
 		livePR, err = h.client.GetPR(ctx, h.repo, id)
 		if err != nil {
 			return nil, err
@@ -124,7 +124,11 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 	}
 	if livePR != nil {
 		pr.ObservedHeadSHA = strings.TrimSpace(livePR.SourceCommitHash)
-		if hasReviewer(h.requiredReviews, "coderabbit") && h.requiredReviewBotID != "" {
+		if hasReviewer(h.requiredReviews, "coderabbit") {
+			if h.requiredReviewBotID == "" {
+				checks = append(checks, scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: pr.ObservedHeadSHA, AppHost: "bitbucket.org", App: "coderabbitai", Bucket: scm.CheckBucketPending, State: "UNSUPPORTED; configure trusted ci.required_review_bot_id"})
+				return checks, nil
+			}
 			check, err := h.codeRabbitCheck(ctx, id, pr.ObservedHeadSHA)
 			if err != nil {
 				return nil, err

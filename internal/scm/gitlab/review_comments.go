@@ -217,11 +217,15 @@ func (h *Host) reviewCommentTarget(ctx context.Context, pr *scm.PR) (string, int
 }
 
 func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check, bool, error) {
-	if h.requiredReviewBotID == "" || !containsReviewer(h.requiredReviews, "coderabbit") || h.projectPath == "" {
+	if !containsReviewer(h.requiredReviews, "coderabbit") {
 		return scm.Check{}, false, nil
 	}
 	accountID, _ := strconv.ParseInt(h.requiredReviewBotID, 10, 64)
 	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: strings.TrimSpace(pr.HeadSHA), AppHost: h.host, App: "coderabbitai", AppID: accountID, Bucket: scm.CheckBucketPending, State: "Review incomplete"}
+	if h.requiredReviewBotID == "" || h.projectPath == "" {
+		check.State = "UNSUPPORTED; configure trusted ci.required_review_bot_id and GitLab project"
+		return check, true, nil
+	}
 	if check.AppHost == "" {
 		check.AppHost = "gitlab"
 	}
