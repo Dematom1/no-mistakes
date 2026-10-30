@@ -16,12 +16,12 @@ func TestCodeRabbitCheckRequiresFreshTrustedReviewAndNoOpenBotTask(t *testing.T)
 		outdated                       bool
 		want                           scm.CheckBucket
 	}{
-		{"fresh bot review", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketPass},
+		{"bot review without trustworthy arrival time", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketPending},
 		{"wrong identity", "{other-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketPending},
 		{"stale review", "{bot-uuid}", "2025-12-31T00:00:00Z", "CLOSED", false, scm.CheckBucketPending},
 		{"outdated diff note", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", true, scm.CheckBucketPending},
 		{"open bot thread", "{bot-uuid}", "2026-01-02T00:00:00Z", "OPEN", false, scm.CheckBucketFail},
-		{"adversarial body is not evidence", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketPass},
+		{"adversarial body is not evidence", "{bot-uuid}", "2026-01-02T00:00:00Z", "CLOSED", false, scm.CheckBucketPending},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +93,7 @@ func TestGetChecksBindsCodeRabbitResultToStableLiveHead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if pr.ObservedHeadSHA != "head" || len(checks) != 1 || checks[0].HeadSHA != "head" || checks[0].Bucket != scm.CheckBucketPass {
+			if pr.ObservedHeadSHA != "head" || len(checks) != 1 || checks[0].HeadSHA != "head" || checks[0].Bucket != scm.CheckBucketPending {
 				t.Fatalf("observed=%q checks=%+v", pr.ObservedHeadSHA, checks)
 			}
 		})

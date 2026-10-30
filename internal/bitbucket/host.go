@@ -157,24 +157,6 @@ func hasReviewer(reviewers []string, want string) bool {
 
 func (h *Host) codeRabbitCheck(ctx context.Context, id int, head string) (scm.Check, error) {
 	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: head, AppHost: "bitbucket.org", App: "coderabbitai", Bucket: scm.CheckBucketPending, State: "Review incomplete"}
-	commitDate, err := h.client.GetCommitDate(ctx, h.repo, head)
-	if err != nil {
-		return check, err
-	}
-	if commitDate.IsZero() {
-		return check, errors.New("Bitbucket source commit has no date")
-	}
-	activity, err := h.client.ListPRReviewActivity(ctx, h.repo, id)
-	if err != nil {
-		return check, err
-	}
-	completed := false
-	for _, event := range activity {
-		if event.Comment == nil || event.Comment.User.UUID != h.requiredReviewBotID || event.Comment.Inline.Outdated || !event.Comment.CreatedOn.After(commitDate) {
-			continue
-		}
-		completed = true
-	}
 	tasks, err := h.client.ListPRTasks(ctx, h.repo, id)
 	if err != nil {
 		return check, err
@@ -184,9 +166,6 @@ func (h *Host) codeRabbitCheck(ctx context.Context, id int, head string) (scm.Ch
 			check.Bucket, check.State = scm.CheckBucketFail, "Unresolved review finding"
 			return check, nil
 		}
-	}
-	if completed {
-		check.Bucket, check.State = scm.CheckBucketPass, "Review completed"
 	}
 	return check, nil
 }
