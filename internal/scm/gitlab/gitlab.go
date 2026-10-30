@@ -690,8 +690,14 @@ func (h *Host) pipelineChecks(ctx context.Context, pr *scm.PR, pipeline *gitlabH
 	}
 	if check, ok, err := h.codeRabbitReviewCheck(ctx, pr); err != nil {
 		return nil, err
-	} else if ok && (pipeline != nil || check.Bucket != scm.CheckBucketPass) {
+	} else if ok {
 		checks = append(checks, check)
+		if pipeline == nil && check.Bucket == scm.CheckBucketPass {
+			checks = append(checks, scm.Check{
+				Name: "Pipeline registration", ProviderID: "gitlab:pipeline-registration",
+				Bucket: scm.CheckBucketPending, State: "WAITING FOR PIPELINE",
+			})
+		}
 	}
 	if afterReads != nil {
 		if err := afterReads(); err != nil {
