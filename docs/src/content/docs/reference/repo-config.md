@@ -800,7 +800,7 @@ A repository value overrides the operator's global list; an explicit `[]` disabl
 Unknown or duplicate reviewer names fail configuration loading.
 
 CodeRabbit must already be installed for the repository by its administrator.
-no-mistakes uses the existing GitHub CLI authentication for read-only observation and adds no CodeRabbit credentials or installation flow.
+no-mistakes uses the provider CLI's existing authentication for read-only observation and adds no CodeRabbit credentials or installation flow.
 When the list is empty, no additional completion checks are made.
 Existing CI and Greptile behavior stays unchanged. CodeRabbit is recognized as a review bot only when this list names `coderabbit`: otherwise an installed CodeRabbit's check is an ordinary CI check and its review-thread comments are never findings, exactly as if no-mistakes had no CodeRabbit support. Once opted in, failed CodeRabbit checks use the same review-bot findings path as Greptile.
 
