@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -223,6 +224,58 @@ func TestPRStep_OwnedAppendixDraftsBriefWithoutReplacingAuthorNarrative(t *testi
 	}
 	if strings.Contains(appendix, source) || strings.Count(appendix, "## Intent") != 1 || strings.Count(appendix, pipelineAttestationCommentPrefix) != 1 {
 		t.Fatalf("owned appendix leaked source or duplicated managed sections:\n%s", appendix)
+	}
+}
+
+func TestPRStep_ExistingPRUpdateAddsBriefWithoutReplacingNarrative(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	const (
+		source    = "Keep internal follow-up token task-735 out of the public brief."
+		narrative = "## What Changed\n\n- Preserve the author's existing explanation"
+	)
+	createEnv, _ := fakeGH(t, "")
+	ag := &mockAgent{name: "test", runFn: func(_ context.Context, _ agent.RunOpts) (*agent.Result, error) {
+		return &agent.Result{Output: json.RawMessage(`{"title":"feat: preserve the existing narrative","body":"## What Changed\n\n- Preserve the author's existing explanation"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = createEnv
+	sctx.UserIntent = source
+	sctx.Config.PR.UpdateText = config.PRUpdateTextKeep
+	insertCompletedStep(t, sctx, types.StepReview, "", "")
+	if _, err := (&PRStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	created := string(mustRead(t, envEntry(createEnv, "FAKE_CLI_PR_BODY_FILE")))
+	if !strings.Contains(created, narrative) {
+		t.Fatalf("created PR omitted narrative:\n%s", created)
+	}
+
+	sctx.Config.PR.Intent.Format = "brief"
+	updateEnv, _ := fakeGH(t, "https://github.com/test/repo/pull/42")
+	bodyFile := envEntry(updateEnv, "FAKE_CLI_PR_BODY_FILE")
+	if err := os.WriteFile(bodyFile, []byte(created), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag.runFn = func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if strings.Contains(opts.Prompt, "Draft a pull request title and summary") {
+			t.Fatalf("existing narrative update drafted replacement content: %s", opts.Prompt)
+		}
+		return &agent.Result{Output: json.RawMessage(`{"intent_brief":{"goal":"Keep the existing narrative stable"}}`)}, nil
+	}
+	sctx.Env = updateEnv
+	if _, err := (&PRStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	updated := string(mustRead(t, bodyFile))
+	if !strings.Contains(updated, narrative) || !strings.Contains(updated, "## Intent\n\nKeep the existing narrative stable") {
+		t.Fatalf("existing PR update lost narrative or structured brief:\n%s", updated)
+	}
+	if strings.Contains(updated, source) || strings.Contains(updated, "task-735") || strings.Count(updated, "## Intent") != 1 {
+		t.Fatalf("updated PR leaked raw intent or duplicated the brief:\n%s", updated)
+	}
+	if !strings.HasPrefix(updated, narrative) {
+		t.Fatalf("updated PR changed the author's narrative prefix:\n%s", updated)
 	}
 }
 
