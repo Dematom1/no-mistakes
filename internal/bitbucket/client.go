@@ -56,6 +56,26 @@ type PipelineStep struct {
 	} `json:"state"`
 }
 
+type bitbucketReviewActivity struct {
+	Comment *struct {
+		CreatedOn time.Time `json:"created_on"`
+		User      struct {
+			UUID string `json:"uuid"`
+		} `json:"user"`
+		Inline struct {
+			Outdated bool `json:"outdated"`
+		} `json:"inline"`
+	} `json:"comment"`
+	Update *struct {
+		Date   time.Time `json:"date"`
+		Source struct {
+			Commit struct {
+				Hash string `json:"hash"`
+			} `json:"commit"`
+		} `json:"source"`
+	} `json:"update"`
+}
+
 type bitbucketTask struct {
 	State   string `json:"state"`
 	Creator struct {
@@ -225,6 +245,10 @@ func (c *Client) ListPRStatuses(ctx context.Context, repo RepoRef, prID int) ([]
 		next = response.Next
 	}
 	return statuses, nil
+}
+
+func (c *Client) ListPRReviewActivity(ctx context.Context, repo RepoRef, prID int) ([]bitbucketReviewActivity, error) {
+	return listPRValues[bitbucketReviewActivity](ctx, c, fmt.Sprintf("%s/%d/activity", repoPRPath(repo), prID))
 }
 
 func (c *Client) ListPRTasks(ctx context.Context, repo RepoRef, prID int) ([]bitbucketTask, error) {
