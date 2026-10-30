@@ -5,7 +5,7 @@ import "testing"
 func TestRequiredReviewsConfiguration(t *testing.T) {
 	t.Parallel()
 	const on = "ci:\n  required_reviews: [coderabbit]\n"
-	const pinned = "ci:\n  required_reviews: [coderabbit]\n  required_review_app_id: 987\n  required_review_bot_id: azure-user-guid\n"
+	const pinned = "ci:\n  required_reviews: [coderabbit]\n  required_review_app_id: 987\n  required_review_bot_id: '987654321'\n"
 	const off = "ci:\n  required_reviews: []\n"
 	for _, tc := range []struct {
 		name, global, trusted, pushed string
@@ -39,7 +39,7 @@ func TestRequiredReviewsConfiguration(t *testing.T) {
 	trusted, _ := LoadRepoFromBytes([]byte(pinned))
 	pushed, _ := LoadRepoFromBytes([]byte("{}"))
 	effective := Merge(global, EffectiveRepoConfig(pushed, trusted, false)).CI
-	if effective.RequiredReviewAppID != 987 || effective.RequiredReviewBotID != "azure-user-guid" {
+	if effective.RequiredReviewAppID != 987 || effective.RequiredReviewBotID != "987654321" {
 		t.Fatalf("trusted review identity=%d/%q", effective.RequiredReviewAppID, effective.RequiredReviewBotID)
 	}
 	for _, bad := range []string{"[other]", "[coderabbit, coderabbit]", "[CodeRabbit]", "[123]", "coderabbit"} {
@@ -51,8 +51,10 @@ func TestRequiredReviewsConfiguration(t *testing.T) {
 			t.Errorf("repo accepted %s", bad)
 		}
 	}
-	if _, err := LoadRepoFromBytes([]byte("ci:\n  required_review_bot_id: ''\n")); err == nil {
-		t.Error("repo accepted empty bot ID")
+	for _, invalidID := range []string{"''", "0", "-1", "azure-user-guid", "1.2"} {
+		if _, err := LoadRepoFromBytes([]byte("ci:\n  required_review_bot_id: " + invalidID + "\n")); err == nil {
+			t.Errorf("repo accepted bot ID %s", invalidID)
+		}
 	}
 	for _, invalidID := range []string{"0", "-1"} {
 		data := []byte("ci:\n  required_review_app_id: " + invalidID + "\n")

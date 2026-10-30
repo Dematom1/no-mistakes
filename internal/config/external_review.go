@@ -1,10 +1,16 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 func validateRequiredReviewBotID(botID *string) error {
-	if botID != nil && *botID == "" {
-		return fmt.Errorf("ci.required_review_bot_id must not be empty")
+	if botID != nil {
+		id, err := strconv.ParseInt(*botID, 10, 64)
+		if err != nil || id <= 0 {
+			return fmt.Errorf("ci.required_review_bot_id must be a positive decimal account ID")
+		}
 	}
 	return nil
 }
