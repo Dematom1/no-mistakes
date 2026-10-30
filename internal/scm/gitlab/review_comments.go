@@ -266,6 +266,7 @@ func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check
 	if err != nil {
 		return scm.Check{}, false, err
 	}
+	completed := false
 	for _, discussion := range discussions {
 		for _, note := range discussion.Notes {
 			if note.Author == nil || strconv.FormatInt(note.Author.ID, 10) != h.requiredReviewBotID {
@@ -275,7 +276,13 @@ func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check
 				check.Bucket, check.State = scm.CheckBucketFail, "Unresolved review finding"
 				return check, true, nil
 			}
+			if note.CreatedAt.After(pushedAt) && (note.Position == nil || note.Position.HeadSHA == "" || note.Position.HeadSHA == check.HeadSHA) {
+				completed = true
+			}
 		}
+	}
+	if completed {
+		check.Bucket, check.State = scm.CheckBucketPass, "Review completed"
 	}
 	return check, true, nil
 }
