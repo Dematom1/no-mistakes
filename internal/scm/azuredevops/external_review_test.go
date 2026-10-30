@@ -35,7 +35,7 @@ func TestRequiredReviewStatusIsBoundToHeadAndIdentity(t *testing.T) {
 			if tc.state != "" {
 				status = fmt.Sprintf(`"count":1,"value":[{"id":17,"state":%q,"description":%q,"context":{"genre":"code review","name":"CodeRabbit"},"createdBy":{"id":%q}}]`, tc.state, tc.description, tc.botID)
 			}
-			threadsCommand := "az rest --method get --url " + testOrg + "/myproject/_apis/git/repositories/myrepo/pullRequests/42/threads?api-version=7.1 --output json"
+			threadsCommand := azureReviewThreadsCommand()
 			responses := map[string]azdoTestResponse{
 				threadsCommand: {stdout: `{"count":0,"value":[]}`},
 				"az repos pr policy list --id 42 --organization " + testOrg + " --output json": {stdout: "[]"},
@@ -57,8 +57,7 @@ func TestRequiredReviewStatusIsBoundToHeadAndIdentity(t *testing.T) {
 
 func TestRequiredReviewReadsOnlyUnresolvedThreadsFromConfiguredIdentity(t *testing.T) {
 	t.Parallel()
-	threadsURL := testOrg + "/myproject/_apis/git/repositories/myrepo/pullRequests/42/threads?api-version=7.1"
-	threadsCommand := "az rest --method get --url " + threadsURL + " --output json"
+	threadsCommand := azureReviewThreadsCommand()
 	responses := map[string]azdoTestResponse{
 		"az repos pr show --id 42 --organization " + testOrg + " --output json": {stdout: azureReviewPR(azureReviewHead)},
 		threadsCommand: {stdout: `{"count":2,"value":[{"id":1,"status":"active","threadContext":{"filePath":"src/a.go","rightFileStart":{"line":8}},"comments":[{"id":10,"content":"untrusted text","author":{"id":"` + azureReviewBotID + `","displayName":"CodeRabbit"}}]},{"id":2,"status":"fixed","comments":[{"id":11,"content":"resolved","author":{"id":"` + azureReviewBotID + `"}}]}]}`},
@@ -82,8 +81,7 @@ func TestAzureReviewThreadStatusNames(t *testing.T) {
 		{"active", 1}, {"pending", 1}, {"fixed", 0}, {"wontFix", 0}, {"closed", 0}, {"byDesign", 0}, {"future", 1},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
-			threadsURL := testOrg + "/myproject/_apis/git/repositories/myrepo/pullRequests/42/threads?api-version=7.1"
-			threadsCommand := "az rest --method get --url " + threadsURL + " --output json"
+			threadsCommand := azureReviewThreadsCommand()
 			body := fmt.Sprintf(`{"count":1,"value":[{"id":1,"status":%q,"threadContext":{"filePath":"a.go","rightFileStart":{"line":3}},"comments":[{"id":2,"content":"x","author":{"id":%q}}]}]}`, tc.status, azureReviewBotID)
 			host := newTestHost(map[string]azdoTestResponse{
 				"az repos pr show --id 42 --organization " + testOrg + " --output json": {stdout: azureReviewPR(azureReviewHead)},
@@ -124,8 +122,7 @@ func TestRequiredReviewStatusHeadMovementFailsClosed(t *testing.T) {
 
 func TestRequiredReviewHeadMovementDuringCommentReadFailsClosed(t *testing.T) {
 	t.Parallel()
-	threadsURL := testOrg + "/myproject/_apis/git/repositories/myrepo/pullRequests/42/threads?api-version=7.1"
-	threadsCommand := "az rest --method get --url " + threadsURL + " --output json"
+	threadsCommand := azureReviewThreadsCommand()
 	responses := map[string]azdoTestResponse{
 		"az repos pr policy list --id 42 --organization " + testOrg + " --output json": {stdout: "[]"},
 		"az repos pr show --id 42 --organization " + testOrg + " --output json":        {stdout: azureReviewPR(azureReviewHead)},
@@ -179,6 +176,10 @@ func azureReviewPR(head string) string {
 	return fmt.Sprintf(`{"pullRequestId":42,"lastMergeSourceCommit":{"commitId":%q}}`, head)
 }
 
+func azureReviewThreadsCommand() string {
+	return "az devops invoke --organization " + testOrg + " --area git --resource pullRequests --route-parameters project=myproject repositoryId=myrepo pullRequestId=42 --api-version 7.1 --http-method GET --output json"
+}
+
 func azureReviewStatusCommand(head string) string {
-	return "az rest --method get --url " + testOrg + "/myproject/_apis/git/repositories/myrepo/commits/" + head + "/statuses?latestOnly=true&top=1000&api-version=7.1 --output json"
+	return "az devops invoke --organization " + testOrg + " --area git --resource commits --route-parameters project=myproject repositoryId=myrepo commitId=" + head + " --query-parameters latestOnly=true top=1000 --api-version 7.1 --http-method GET --output json"
 }

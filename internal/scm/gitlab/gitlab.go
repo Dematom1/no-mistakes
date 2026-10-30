@@ -690,7 +690,7 @@ func (h *Host) pipelineChecks(ctx context.Context, pr *scm.PR, pipeline *gitlabH
 	}
 	if check, ok, err := h.codeRabbitReviewCheck(ctx, pr); err != nil {
 		return nil, err
-	} else if ok {
+	} else if ok && (pipeline != nil || check.Bucket != scm.CheckBucketPass) {
 		checks = append(checks, check)
 	}
 	if afterReads != nil {
