@@ -223,7 +223,7 @@ func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check
 	accountID, _ := strconv.ParseInt(h.requiredReviewBotID, 10, 64)
 	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: strings.TrimSpace(pr.HeadSHA), AppHost: h.host, App: "coderabbitai", AppID: accountID, Bucket: scm.CheckBucketPending, State: "Review incomplete"}
 	if h.requiredReviewBotID == "" || h.projectPath == "" {
-		check.State = "UNSUPPORTED; configure trusted ci.required_review_bot_id and GitLab project"
+		check.State = "UNSUPPORTED ON GITLAB; configure trusted ci.required_review_bot_id and GitLab project"
 		return check, true, nil
 	}
 	if check.AppHost == "" {
