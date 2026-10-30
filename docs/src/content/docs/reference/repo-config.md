@@ -789,7 +789,7 @@ ci:
   # GHES only: the immutable CodeRabbit GitHub App ID on this GHES instance.
   required_review_app_id: 12345
   # GitLab: immutable CodeRabbit account ID.
-  required_review_bot_id: 00000000-1111-2222-3333-444444444444
+  required_review_bot_id: "123456789"
 ```
 
 Omit `required_review_app_id` on GitHub.com; no-mistakes uses the documented app ID `347564` there. GHES requires this positive ID from that instance's CodeRabbit app; it does not infer identity from the mutable app slug. GitLab requires `required_review_bot_id` to match the CodeRabbit account's immutable ID. These settings are trusted-only, like the rest of `ci`.

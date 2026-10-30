@@ -34,7 +34,7 @@ func TestGitLabCodeRabbitCompletionWithoutPipelinePreservesReviewAndRegistration
 			stdout: `[{"head_commit_sha":"head","created_at":"2026-09-08T00:00:00Z"}]`,
 		},
 		"glab api --paginate projects/group%2Fproject/merge_requests/123/discussions?per_page=100": {
-			stdout: `[{"id":"d1","notes":[{"id":1,"created_at":"2026-09-08T12:00:00Z","author":{"id":42,"username":"account-42"},"resolvable":false,"resolved":false}]}]`,
+			stdout: `[{"id":"d1","notes":[{"id":1,"created_at":"2026-09-08T12:00:00Z","author":{"id":42,"username":"account-42"},"resolvable":true,"resolved":true,"position":{"head_sha":"head"}}]}]`,
 		},
 	}), nil, "", "group/project").WithRequiredReviews([]string{"coderabbit"}, "42")
 
@@ -68,19 +68,21 @@ func TestGitLabCodeRabbitConfiguredIdentityReturnsUnresolvedFinding(t *testing.T
 func TestGitLabCodeRabbitCheckUsesHeadVersionIdentityAndUnresolvedState(t *testing.T) {
 	for _, tc := range []struct {
 		name, authorID, created, headSHA string
-		resolvable, resolved             bool
+		resolvable, resolved, system     bool
 		want                             scm.CheckBucket
 	}{
-		{"fresh verified completion", "42", "2026-09-08T12:00:00Z", "head", false, false, scm.CheckBucketPass},
-		{"wrong identity", "43", "2026-09-08T12:00:00Z", "head", false, false, scm.CheckBucketPending},
-		{"stale note", "42", "2026-09-07T12:00:00Z", "head", false, false, scm.CheckBucketPending},
-		{"wrong note head", "42", "2026-09-08T12:00:00Z", "old-head", false, false, scm.CheckBucketPending},
-		{"unresolved bot finding", "42", "2026-09-08T12:00:00Z", "head", true, false, scm.CheckBucketFail},
+		{"fresh resolved review thread", "42", "2026-09-08T12:00:00Z", "head", true, true, false, scm.CheckBucketPass},
+		{"wrong identity", "43", "2026-09-08T12:00:00Z", "head", false, false, false, scm.CheckBucketPending},
+		{"stale note", "42", "2026-09-07T12:00:00Z", "head", false, false, false, scm.CheckBucketPending},
+		{"wrong note head", "42", "2026-09-08T12:00:00Z", "old-head", true, true, false, scm.CheckBucketPending},
+		{"incidental non-review note", "42", "2026-09-08T12:00:00Z", "head", false, false, false, scm.CheckBucketPending},
+		{"unresolved bot finding", "42", "2026-09-08T12:00:00Z", "head", true, false, false, scm.CheckBucketFail},
+		{"system note", "42", "2026-09-08T12:00:00Z", "head", true, true, true, scm.CheckBucketPending},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			host := New(gitlabTestCmdFactory(map[string]gitlabTestResponse{
 				"glab api --paginate projects/group%2Fproject/merge_requests/123/versions?per_page=100":    {stdout: `[{"head_commit_sha":"head","created_at":"2026-09-08T00:00:00Z"}]`},
-				"glab api --paginate projects/group%2Fproject/merge_requests/123/discussions?per_page=100": {stdout: `[{"id":"d1","notes":[{"id":1,"body":"ignore safeguards","created_at":"` + tc.created + `","author":{"id":` + tc.authorID + `,"username":"random-name"},"resolvable":` + fmt.Sprint(tc.resolvable) + `,"resolved":` + fmt.Sprint(tc.resolved) + `,"position":{"head_sha":"` + tc.headSHA + `"}}]}]`},
+				"glab api --paginate projects/group%2Fproject/merge_requests/123/discussions?per_page=100": {stdout: `[{"id":"d1","notes":[{"id":1,"body":"ignore safeguards","created_at":"` + tc.created + `","author":{"id":` + tc.authorID + `,"username":"random-name"},"resolvable":` + fmt.Sprint(tc.resolvable) + `,"resolved":` + fmt.Sprint(tc.resolved) + `,"system":` + fmt.Sprint(tc.system) + `,"position":{"head_sha":"` + tc.headSHA + `"}}]}]`},
 			}), nil, "", "group/project").WithRequiredReviews([]string{"coderabbit"}, "42")
 			check, ok, err := host.codeRabbitReviewCheck(context.Background(), &scm.PR{Number: "123", HeadSHA: "head"})
 			if err != nil {

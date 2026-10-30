@@ -276,7 +276,7 @@ func (h *Host) codeRabbitReviewCheck(ctx context.Context, pr *scm.PR) (scm.Check
 				check.Bucket, check.State = scm.CheckBucketFail, "Unresolved review finding"
 				return check, true, nil
 			}
-			if note.CreatedAt.After(pushedAt) && (note.Position == nil || note.Position.HeadSHA == "" || note.Position.HeadSHA == check.HeadSHA) {
+			if note.Resolvable && note.Resolved && !note.System && note.Position != nil && note.Position.HeadSHA == check.HeadSHA && note.CreatedAt.After(pushedAt) {
 				completed = true
 			}
 		}
