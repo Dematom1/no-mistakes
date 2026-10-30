@@ -156,7 +156,7 @@ func hasReviewer(reviewers []string, want string) bool {
 }
 
 func (h *Host) codeRabbitCheck(ctx context.Context, id int, head string) (scm.Check, error) {
-	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: head, AppHost: "bitbucket.org", App: "coderabbitai", Bucket: scm.CheckBucketPending, State: "Review incomplete"}
+	check := scm.Check{Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit", HeadSHA: head, AppHost: "bitbucket.org", App: "coderabbitai", Bucket: scm.CheckBucketPending, State: "UNSUPPORTED; Bitbucket does not expose trustworthy review freshness for the current head"}
 	tasks, err := h.client.ListPRTasks(ctx, h.repo, id)
 	if err != nil {
 		return check, err
