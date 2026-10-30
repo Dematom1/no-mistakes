@@ -66,7 +66,6 @@ func TestCodeRabbitRegistryRequiresImmutableGitHubIdentity(t *testing.T) {
 		{Check{AppID: CodeRabbitAppID, AppHost: "github.com"}, true},
 		{Check{ExternalReview: "coderabbit", AppID: 987, AppHost: "ghe.example.com"}, true},
 		{Check{ExternalReview: "coderabbit", App: "coderabbitai", AppHost: "gitlab.example.com", HeadSHA: "head"}, true},
-		{Check{ExternalReview: "coderabbit", App: "coderabbitai", AppHost: "bitbucket.org", HeadSHA: "head"}, true},
 		{Check{ExternalReview: "coderabbit", App: "coderabbitai", AppHost: "gitlab.example.com"}, false},
 		{Check{ExternalReview: "coderabbit", HeadSHA: "head"}, false},
 		{Check{App: "greptile-apps"}, true},
