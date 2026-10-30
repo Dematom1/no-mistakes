@@ -177,9 +177,9 @@ func azureReviewPR(head string) string {
 }
 
 func azureReviewThreadsCommand() string {
-	return "az devops invoke --organization " + testOrg + " --area git --resource pullRequests --route-parameters project=myproject repositoryId=myrepo pullRequestId=42 --api-version 7.1 --http-method GET --output json"
+	return "az devops invoke --organization " + testOrg + " --area git --resource threads --route-parameters project=myproject repositoryId=myrepo pullRequestId=42 --api-version 7.1 --http-method GET --output json"
 }
 
 func azureReviewStatusCommand(head string) string {
-	return "az devops invoke --organization " + testOrg + " --area git --resource commits --route-parameters project=myproject repositoryId=myrepo commitId=" + head + " --query-parameters latestOnly=true top=1000 --api-version 7.1 --http-method GET --output json"
+	return "az devops invoke --organization " + testOrg + " --area git --resource statuses --route-parameters project=myproject repositoryId=myrepo commitId=" + head + " --query-parameters latestOnly=true top=1000 --api-version 7.1 --http-method GET --output json"
 }

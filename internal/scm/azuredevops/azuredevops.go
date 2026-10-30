@@ -106,7 +106,7 @@ func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewC
 		return nil, err
 	}
 	head := strings.TrimSpace(got.LastMergeSourceCommit.CommitID)
-	out, err := outputJSON(h.cmd(ctx, "az", "devops", "invoke", "--organization", h.org, "--area", "git", "--resource", "pullRequests", "--route-parameters", "project="+h.project, "repositoryId="+h.repo, "pullRequestId="+h.prID(pr), "--api-version", "7.1", "--http-method", "GET", "--output", "json"))
+	out, err := outputJSON(h.cmd(ctx, "az", "devops", "invoke", "--organization", h.org, "--area", "git", "--resource", "threads", "--route-parameters", "project="+h.project, "repositoryId="+h.repo, "pullRequestId="+h.prID(pr), "--api-version", "7.1", "--http-method", "GET", "--output", "json"))
 	if err != nil {
 		return nil, fmt.Errorf("read Azure DevOps review threads: %w", err)
 	}
@@ -502,7 +502,7 @@ func (h *Host) getChecksWithRequiredReviews(ctx context.Context, pr *scm.PR) ([]
 		return nil, errors.New("Azure DevOps PR does not report its current source commit")
 	}
 	pr.ObservedHeadSHA = head
-	out, err := outputJSON(h.cmd(ctx, "az", "devops", "invoke", "--organization", h.org, "--area", "git", "--resource", "commits", "--route-parameters", "project="+h.project, "repositoryId="+h.repo, "commitId="+head, "--query-parameters", "latestOnly=true", "top=1000", "--api-version", "7.1", "--http-method", "GET", "--output", "json"))
+	out, err := outputJSON(h.cmd(ctx, "az", "devops", "invoke", "--organization", h.org, "--area", "git", "--resource", "statuses", "--route-parameters", "project="+h.project, "repositoryId="+h.repo, "commitId="+head, "--query-parameters", "latestOnly=true", "top=1000", "--api-version", "7.1", "--http-method", "GET", "--output", "json"))
 	if err != nil {
 		return nil, fmt.Errorf("read Azure DevOps CodeRabbit commit statuses: %w", err)
 	}
