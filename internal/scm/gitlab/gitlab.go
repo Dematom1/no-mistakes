@@ -692,7 +692,7 @@ func (h *Host) pipelineChecks(ctx context.Context, pr *scm.PR, pipeline *gitlabH
 		return nil, err
 	} else if ok {
 		checks = append(checks, check)
-		if pipeline == nil && check.Bucket == scm.CheckBucketPass {
+		if pipeline == nil {
 			checks = append(checks, scm.Check{
 				Name: "Pipeline registration", ProviderID: "gitlab:pipeline-registration",
 				Bucket: scm.CheckBucketPending, State: "WAITING FOR PIPELINE",

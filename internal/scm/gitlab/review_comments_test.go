@@ -43,8 +43,8 @@ func TestGitLabCodeRabbitCompletionWithoutPipelinePreservesReviewAndRegistration
 		t.Fatalf("GetChecks() error = %v", err)
 	}
 	review, ok := findCheck(checks, "External review: coderabbit")
-	if !ok || review.Bucket != scm.CheckBucketPass {
-		t.Fatalf("checks=%+v, want completed CodeRabbit review to pass without a pipeline", checks)
+	if !ok || review.Bucket != scm.CheckBucketPending {
+		t.Fatalf("checks=%+v, want GitLab review completion to remain pending without explicit completion evidence", checks)
 	}
 	registration, ok := findCheck(checks, "Pipeline registration")
 	if !ok || registration.Bucket != scm.CheckBucketPending {
@@ -71,7 +71,7 @@ func TestGitLabCodeRabbitCheckUsesHeadVersionIdentityAndUnresolvedState(t *testi
 		resolvable, resolved, system     bool
 		want                             scm.CheckBucket
 	}{
-		{"fresh resolved review thread", "42", "2026-09-08T12:00:00Z", "head", true, true, false, scm.CheckBucketPass},
+		{"resolved review activity is not completion evidence", "42", "2026-09-08T12:00:00Z", "head", true, true, false, scm.CheckBucketPending},
 		{"wrong identity", "43", "2026-09-08T12:00:00Z", "head", false, false, false, scm.CheckBucketPending},
 		{"stale note", "42", "2026-09-07T12:00:00Z", "head", false, false, false, scm.CheckBucketPending},
 		{"wrong note head", "42", "2026-09-08T12:00:00Z", "old-head", true, true, false, scm.CheckBucketPending},
