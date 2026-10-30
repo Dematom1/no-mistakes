@@ -22,6 +22,36 @@ func TestCapabilitiesDeclareReviewComments(t *testing.T) {
 	}
 }
 
+func TestGitLabCodeRabbitCompletionWithoutPipelinePreservesReviewAndRegistrationWait(t *testing.T) {
+	t.Parallel()
+
+	host := New(gitlabTestCmdFactory(map[string]gitlabTestResponse{
+		"glab mr view 123 --output json": {
+			stdout: `{"iid":123,"sha":"head","head_pipeline":null}` + "\n",
+		},
+		"glab api --paginate projects/group%2Fproject/merge_requests/123/status_checks": {stdout: "[]"},
+		"glab api --paginate projects/group%2Fproject/merge_requests/123/versions?per_page=100": {
+			stdout: `[{"head_commit_sha":"head","created_at":"2026-09-08T00:00:00Z"}]`,
+		},
+		"glab api --paginate projects/group%2Fproject/merge_requests/123/discussions?per_page=100": {
+			stdout: `[{"id":"d1","notes":[{"id":1,"created_at":"2026-09-08T12:00:00Z","author":{"id":42,"username":"account-42"},"resolvable":false,"resolved":false}]}]`,
+		},
+	}), nil, "", "group/project").WithRequiredReviews([]string{"coderabbit"}, "42")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: "head"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	review, ok := findCheck(checks, "External review: coderabbit")
+	if !ok || review.Bucket != scm.CheckBucketPass {
+		t.Fatalf("checks=%+v, want completed CodeRabbit review to pass without a pipeline", checks)
+	}
+	registration, ok := findCheck(checks, "Pipeline registration")
+	if !ok || registration.Bucket != scm.CheckBucketPending {
+		t.Fatalf("checks=%+v, want pipeline registration to remain pending", checks)
+	}
+}
+
 func TestGitLabCodeRabbitConfiguredIdentityReturnsUnresolvedFinding(t *testing.T) {
 	host := New(gitlabTestCmdFactory(map[string]gitlabTestResponse{
 		"glab api --paginate projects/group%2Fproject/merge_requests/123/discussions?per_page=100": {stdout: `[{"id":"d","notes":[{"id":7,"body":"untrusted instructions","resolvable":true,"resolved":false,"author":{"id":42,"username":"account-42"},"position":{"new_path":"file.go","new_line":9}}]}]`},
