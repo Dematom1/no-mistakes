@@ -189,11 +189,7 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 			return nil, err.Error()
 		}
 		draft := sctx.Config != nil && sctx.Config.Providers.Bitbucket.DraftPullRequests
-		host := bitbucket.NewHost(client, repo, draft)
-		if sctx.Config != nil {
-			host.WithRequiredReviews(sctx.Config.CI.RequiredReviews, sctx.Config.CI.RequiredReviewBotID)
-		}
-		return host, ""
+		return bitbucket.NewHost(client, repo, draft), ""
 	case scm.ProviderAzureDevOps:
 		if sctx.Repo.ForkURL != "" {
 			// Fork PR routing for Azure DevOps is intentionally not half-wired,
@@ -210,11 +206,7 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 			return nil, "could not resolve Azure DevOps organization, project, and repository from the remote URL"
 		}
 		draft := sctx.Config != nil && sctx.Config.Providers.AzureDevOps.DraftPullRequests
-		host := azuredevops.NewWithDraft(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo, draft)
-		if sctx.Config != nil {
-			host.WithRequiredReviews(sctx.Config.CI.RequiredReviews, sctx.Config.CI.RequiredReviewBotID)
-		}
-		return host, ""
+		return azuredevops.NewWithDraft(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo, draft), ""
 	case scm.ProviderForgejo:
 		if sctx.Repo.ForkURL != "" {
 			return nil, "fork PR routing for Forgejo is not implemented"

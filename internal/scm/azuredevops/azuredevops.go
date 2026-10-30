@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -47,14 +46,12 @@ type CmdFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 // Host talks to Azure DevOps through the az CLI (azure-devops extension).
 type Host struct {
-	cmd                 CmdFactory
-	cliAvailable        func() bool
-	org                 string // organization URL, e.g. https://dev.azure.com/myorg
-	project             string // project name (may contain spaces)
-	repo                string // repository name
-	requiredReviews     []string
-	requiredReviewBotID string
-	draft               bool // open created PRs as drafts (az repos pr create --draft true)
+	cmd          CmdFactory
+	cliAvailable func() bool
+	org          string // organization URL, e.g. https://dev.azure.com/myorg
+	project      string // project name (may contain spaces)
+	repo         string // repository name
+	draft        bool   // open created PRs as drafts (az repos pr create --draft true)
 }
 
 // New builds a Host. cliAvailable reports whether the az binary is resolvable
@@ -81,12 +78,6 @@ func NewWithDraft(cmd CmdFactory, cliAvailable func() bool, org, project, repo s
 	return h
 }
 
-func (h *Host) WithRequiredReviews(reviewers []string, botID string) *Host {
-	h.requiredReviews = append([]string(nil), reviewers...)
-	h.requiredReviewBotID = strings.TrimSpace(botID)
-	return h
-}
-
 func (h *Host) Provider() scm.Provider { return scm.ProviderAzureDevOps }
 
 // Capabilities reports the Azure DevOps feature matrix. Merge status is
@@ -94,67 +85,7 @@ func (h *Host) Provider() scm.Provider { return scm.ProviderAzureDevOps }
 // yet wired up - the az CLI has no first-class build-log command, so callers
 // gate on FailedCheckLogs and skip it.
 func (h *Host) Capabilities() scm.Capabilities {
-	return scm.Capabilities{MergeableState: true, FailedCheckLogs: false, ReviewComments: true}
-}
-
-func (h *Host) GetReviewComments(ctx context.Context, pr *scm.PR) ([]scm.ReviewComment, error) {
-	if h.requiredReviewBotID == "" || !h.isAzureDevOpsServices() {
-		return nil, nil
-	}
-	got, err := h.showPR(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-	head := strings.TrimSpace(got.LastMergeSourceCommit.CommitID)
-	out, err := outputJSON(h.cmd(ctx, "az", "devops", "invoke", "--organization", h.org, "--area", "git", "--resource", "threads", "--route-parameters", "project="+h.project, "repositoryId="+h.repo, "pullRequestId="+h.prID(pr), "--api-version", "7.1", "--http-method", "GET", "--output", "json"))
-	if err != nil {
-		return nil, fmt.Errorf("read Azure DevOps review threads: %w", err)
-	}
-	var response struct {
-		Count *int `json:"count"`
-		Value []struct {
-			ID            int    `json:"id"`
-			Status        string `json:"status"`
-			ThreadContext struct {
-				FilePath       string `json:"filePath"`
-				RightFileStart struct {
-					Line int `json:"line"`
-				} `json:"rightFileStart"`
-			} `json:"threadContext"`
-			Comments []struct {
-				ID      int    `json:"id"`
-				Content string `json:"content"`
-				Author  struct {
-					ID          string `json:"id"`
-					DisplayName string `json:"displayName"`
-				} `json:"author"`
-			} `json:"comments"`
-		} `json:"value"`
-	}
-	if err := json.Unmarshal(out, &response); err != nil || response.Count == nil || response.Value == nil || *response.Count != len(response.Value) {
-		return nil, errors.New("parse Azure DevOps review threads: incomplete response")
-	}
-	latest, err := h.showPR(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-	if latest.LastMergeSourceCommit.CommitID != head {
-		return nil, fmt.Errorf("%w during Azure DevOps review thread discovery", scm.ErrHeadChanged)
-	}
-	var comments []scm.ReviewComment
-	for _, thread := range response.Value {
-		switch strings.ToLower(strings.TrimSpace(thread.Status)) {
-		case "fixed", "wontfix", "closed", "bydesign":
-			continue
-		}
-		for _, comment := range thread.Comments {
-			if !strings.EqualFold(comment.Author.ID, h.requiredReviewBotID) {
-				continue
-			}
-			comments = append(comments, scm.ReviewComment{ID: strconv.Itoa(comment.ID), Author: "coderabbitai", VerifiedAuthor: true, Path: thread.ThreadContext.FilePath, Line: thread.ThreadContext.RightFileStart.Line, Body: comment.Content})
-		}
-	}
-	return comments, nil
+	return scm.Capabilities{MergeableState: true, FailedCheckLogs: false}
 }
 
 // orgArgs scopes a command to the organization. The show/update/policy-list
@@ -414,13 +345,6 @@ func (h *Host) GetPRState(ctx context.Context, pr *scm.PR) (scm.PRState, error) 
 }
 
 func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
-	if slices.Contains(h.requiredReviews, "coderabbit") {
-		return h.getChecksWithRequiredReviews(ctx, pr)
-	}
-	return h.getPolicyChecks(ctx, pr)
-}
-
-func (h *Host) getPolicyChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 	id := h.prID(pr)
 	if id == "" {
 		return nil, errors.New("az repos pr policy list: missing PR id")
@@ -456,127 +380,6 @@ func (h *Host) getPolicyChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, er
 		})
 	}
 	return checks, nil
-}
-
-func (h *Host) isAzureDevOpsServices() bool {
-	parsed, err := url.Parse(h.org)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(parsed.Hostname())
-	return host == "dev.azure.com" || strings.HasSuffix(host, ".visualstudio.com")
-}
-
-func (h *Host) getChecksWithRequiredReviews(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
-	checks, err := h.getPolicyChecks(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-	if h.requiredReviewBotID == "" || !h.isAzureDevOpsServices() {
-		reason := "UNSUPPORTED ON AZURE DEVOPS; configure trusted ci.required_review_bot_id"
-		if !h.isAzureDevOpsServices() {
-			reason = "UNSUPPORTED ON AZURE DEVOPS SERVER; CodeRabbit documents exact-head commit statuses for Azure DevOps Services only"
-		}
-		got, err := h.showPR(ctx, pr)
-		if err != nil {
-			return nil, err
-		}
-		head := strings.TrimSpace(got.LastMergeSourceCommit.CommitID)
-		if head == "" {
-			return nil, errors.New("Azure DevOps PR does not report its current source commit")
-		}
-		pr.ObservedHeadSHA = head
-		return append(checks, scm.Check{
-			Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit",
-			HeadSHA: head, Bucket: scm.CheckBucketFail,
-			State: reason,
-		}), nil
-	}
-	prID := h.prID(pr)
-	got, err := h.showPR(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-	head := strings.TrimSpace(got.LastMergeSourceCommit.CommitID)
-	if head == "" {
-		return nil, errors.New("Azure DevOps PR does not report its current source commit")
-	}
-	pr.ObservedHeadSHA = head
-	out, err := outputJSON(h.cmd(ctx, "az", "devops", "invoke", "--organization", h.org, "--area", "git", "--resource", "statuses", "--route-parameters", "project="+h.project, "repositoryId="+h.repo, "commitId="+head, "--query-parameters", "latestOnly=true", "top=1000", "--api-version", "7.1", "--http-method", "GET", "--output", "json"))
-	if err != nil {
-		return nil, fmt.Errorf("read Azure DevOps CodeRabbit commit statuses: %w", err)
-	}
-	var response struct {
-		Count *int `json:"count"`
-		Value []struct {
-			ID          int64  `json:"id"`
-			State       string `json:"state"`
-			Description string `json:"description"`
-			Context     struct {
-				Genre string `json:"genre"`
-				Name  string `json:"name"`
-			} `json:"context"`
-			CreatedBy struct {
-				ID string `json:"id"`
-			} `json:"createdBy"`
-		} `json:"value"`
-	}
-	if err := json.Unmarshal(out, &response); err != nil || response.Count == nil || response.Value == nil || *response.Count != len(response.Value) {
-		return nil, fmt.Errorf("parse Azure DevOps commit statuses: incomplete response")
-	}
-	check := scm.Check{
-		Name: "External review: coderabbit", ProviderID: "external-review:coderabbit", ExternalReview: "coderabbit",
-		HeadSHA: head, AppHost: h.org, App: "coderabbitai", Bucket: scm.CheckBucketPending, State: "MISSING",
-	}
-	for _, status := range response.Value {
-		if status.Context.Genre != "code review" || status.Context.Name != "CodeRabbit" {
-			continue
-		}
-		check.ExecutionID = strconv.FormatInt(status.ID, 10)
-		if status.ID <= 0 || !strings.EqualFold(strings.TrimSpace(status.CreatedBy.ID), h.requiredReviewBotID) {
-			check.Bucket = scm.CheckBucketFail
-			check.State = "UNVERIFIED PUBLISHER IDENTITY"
-			break
-		}
-		switch strings.ToLower(strings.TrimSpace(status.State)) {
-		case "pending":
-			check.Bucket, check.State = scm.CheckBucketPending, "PENDING"
-		case "succeeded":
-			if status.Description == "Review completed" || status.Description == "Review approved" {
-				check.Bucket, check.State = scm.CheckBucketPass, "SUCCESS"
-			} else {
-				check.Bucket, check.State = scm.CheckBucketFail, "INCOMPLETE: "+status.Description
-			}
-		default:
-			check.Bucket, check.State = scm.CheckBucketFail, strings.ToUpper(status.State)
-		}
-		break
-	}
-	latest, err := h.showPR(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-	if latest.LastMergeSourceCommit.CommitID != head {
-		return nil, fmt.Errorf("%w during Azure DevOps CodeRabbit status discovery", scm.ErrHeadChanged)
-	}
-	comments, err := h.GetReviewComments(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-	if check.Bucket == scm.CheckBucketPass && len(comments) > 0 {
-		check.Bucket, check.State = scm.CheckBucketFail, "UNRESOLVED_FINDINGS"
-	}
-	latest, err = h.showPR(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-	if latest.LastMergeSourceCommit.CommitID != head {
-		return nil, fmt.Errorf("%w during Azure DevOps review findings discovery", scm.ErrHeadChanged)
-	}
-	if prID == "" {
-		return nil, errors.New("az repos pr policy list: missing PR id")
-	}
-	return append(checks, check), nil
 }
 
 func (h *Host) GetMergeableState(ctx context.Context, pr *scm.PR) (scm.MergeableState, error) {
