@@ -71,9 +71,8 @@ func countLogs(logs []string, line string) int {
 	return n
 }
 
-// A green PR GitHub reports BEHIND is refused by a base that requires
-// up-to-date branches, so the monitor takes the merge-conflict rebase repair
-// once the base has held still for one poll, and only once (issue #1402).
+// Without an existing pipeline attestation, a green PR GitHub reports BEHIND
+// falls back to the merge-conflict repair after the base holds still for one poll.
 func TestCIStep_GreenBehindPRTakesTheRebaseRepairOnceAfterTheBaseSettles(t *testing.T) {
 	t.Parallel()
 	var prompts []string
@@ -158,8 +157,8 @@ func TestCIStep_GreenBehindPRTakesTheRebaseRepairOnceAfterTheBaseSettles(t *test
 	}
 }
 
-// The first BEHIND observation is a wait, the second at the same base tip is
-// one auto-fix finding the executor routes into the rebase repair.
+// When the deterministic path cannot apply, the second BEHIND observation at
+// the same base tip becomes one auto-fix finding for the ordinary repair.
 func TestCIStep_GreenBehindPRObservationIsOneBehindBaseFinding(t *testing.T) {
 	t.Parallel()
 	sctx, logs := behindBaseContext(t, &mockAgent{name: "test"}, "MERGEABLE BEHIND")

@@ -1007,9 +1007,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 						return ciObservationOutcome(botFindings), nil
 					}
 					if mergeBehind {
-						// Green checks the forge still will not merge: the
-						// base requires branches to be up to date. The
-						// merge-conflict repair rebases onto the PR base.
+						// Green checks the forge still will not merge because the
+						// base requires an update. Try a deterministic trivial rebase
+						// first; any unsupported or unproven case keeps the full repair.
 						behindObserved = true
 						tipCtx, cancel := context.WithTimeout(ctx, defaultBaseBranchTipResolveWindow)
 						tip, resolved := baseBranchTip(tipCtx)
@@ -1023,6 +1023,23 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 								return nil, err
 							}
 							break
+						}
+						baseBranch := effectivePRBaseBranch(sctx)
+						if strings.TrimSpace(pr.BaseBranch) != "" {
+							baseBranch = strings.TrimSpace(pr.BaseBranch)
+						}
+						newBase, baseResolved := resolveRunDefaultBranchTip(ctx, sctx, sctx.Run.BaseSHA, baseBranch)
+						if baseResolved {
+							outcome, handled, rebaseErr := s.tryTrivialBehindRebase(sctx, host, pr, newBase)
+							if rebaseErr != nil {
+								return nil, rebaseErr
+							}
+							if handled {
+								if outcome != nil {
+									return outcome, nil
+								}
+								break
+							}
 						}
 						if err := clearCIMonitorReady(sctx); err != nil {
 							return nil, err

@@ -835,12 +835,11 @@ type CI struct {
 	// while leaving an unresolved comment, most often on the pipeline's own
 	// CI repair commit, which no human has reviewed yet.
 	ReviewBotComments string
-	// RebaseBehind opts the CI monitor into rebasing a green GitHub PR that
-	// reports mergeStateStatus BEHIND (its base requires branches to be up to
-	// date) through the merge-conflict repair, which revalidates from Review.
-	// Off by default: each base advance would then cost another full pass, so
-	// a green BEHIND PR reports checks-passed and waits for a human to bring
-	// it up to date (see VISION.md's cost rule).
+	// RebaseBehind opts the CI monitor into rebasing a green PR/MR that the
+	// forge reports as behind its base. A stable-patch-id proof carries the
+	// existing attestation without rerunning pipeline steps; conflicts or any
+	// failed proof fall back to the ordinary full revalidation path. Off by
+	// default: a green behind PR/MR reports checks-passed and waits for a human.
 	RebaseBehind bool
 	// CarryReviewOnReplay opts a CI rebase repair that is a provable pure
 	// replay into keeping the run's review approval: when the repaired head
@@ -1793,13 +1792,13 @@ ci:
   # instead of reporting checks-passed. A repository that sets
   # ci.review_bot_comments on its own default branch overrides this value.
   review_bot_comments: on_failure
-  # Whether the CI monitor rebases a green GitHub PR that GitHub reports BEHIND
-  # because its base requires branches to be up to date. Defaults to false: the
-  # PR reports checks-passed and waits for a human to bring it up to date. Set
-  # true to have the monitor rebase it once the base holds still for one poll;
-  # each such rebase revalidates from Review, so it costs another full pipeline
-  # pass. A repository that sets ci.rebase_behind on its own default branch
-  # overrides this value.
+  # Whether the CI monitor brings a green PR/MR up to date when the forge
+  # reports it behind its base. Defaults to false: the PR reports checks-passed
+  # and waits for a human. Set true to attempt a local rebase after the base
+  # holds still for one poll; matching stable patch IDs carry the attestation
+  # without rerunning pipeline steps, while any conflict or failed proof takes
+  # full validation. A repository that sets ci.rebase_behind on its own default
+  # branch overrides this value.
   rebase_behind: false
   # Whether a CI rebase repair that only replayed the reviewed commits keeps
   # its review approval. Defaults to false: every rebase repair revalidates

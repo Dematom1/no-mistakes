@@ -62,6 +62,7 @@ func TestGetMergeableStateTreatsBlockedStatusesAsResolved(t *testing.T) {
 		{name: "draft", status: "draft_status", want: scm.MergeableOK},
 		{name: "discussions unresolved", status: "discussions_not_resolved", want: scm.MergeableOK},
 		{name: "blocked", status: "blocked_status", want: scm.MergeableOK},
+		{name: "needs rebase", status: "need_rebase", want: scm.MergeableBehind},
 	}
 
 	for _, tt := range tests {

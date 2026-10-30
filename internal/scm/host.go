@@ -129,9 +129,9 @@ const (
 	MergeableConflict MergeableState = "CONFLICTING"
 	MergeablePending  MergeableState = "PENDING"
 	MergeableUnknown  MergeableState = "UNKNOWN"
-	// MergeableBehind is a conflict-free PR the forge still refuses to merge
-	// because its base requires branches to be up to date. Only GitHub
-	// reports it (mergeStateStatus BEHIND).
+	// MergeableBehind is a conflict-free PR/MR the forge refuses to merge
+	// because its source branch must be brought up to date. GitHub reports
+	// mergeStateStatus BEHIND; GitLab reports detailed_merge_status need_rebase.
 	MergeableBehind MergeableState = "BEHIND"
 )
 

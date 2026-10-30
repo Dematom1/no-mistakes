@@ -883,6 +883,21 @@ func (d *DB) UpdateRunHeadSHAWithCarriedReview(id, approvedHeadSHA, headSHA stri
 	return rows == 1, nil
 }
 
+// UpdateRunHeadSHAWithReattestedReview moves a verified trivial-rebase
+// approval to its new head without scheduling another pipeline step. The
+// caller must have independently proved base ancestry and patch identity.
+func (d *DB) UpdateRunHeadSHAWithReattestedReview(id, approvedHeadSHA, headSHA string) (bool, error) {
+	result, err := d.sql.Exec(`UPDATE runs SET head_sha = ?, review_approved_head_sha = ?, updated_at = ? WHERE id = ? AND review_approved_head_sha = ? AND ci_test_restart_pending = 0`, headSHA, headSHA, now(), id, approvedHeadSHA)
+	if err != nil {
+		return false, fmt.Errorf("update run head sha with re-attested review: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("update run head sha with re-attested review: %w", err)
+	}
+	return rows == 1, nil
+}
+
 // RunTestRestartPending reports whether a carried review approval still
 // awaits its restart at Test (see UpdateRunHeadSHAWithCarriedReview).
 func (d *DB) RunTestRestartPending(id string) (bool, error) {

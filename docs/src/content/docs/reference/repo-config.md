@@ -918,7 +918,7 @@ A value set here wins over the operator's own [`ci.review_bot_comments`](/no-mis
 
 ### ci.rebase_behind
 
-Whether the CI monitor rebases a green GitHub PR that GitHub reports `mergeStateStatus: BEHIND`.
+Whether the CI monitor brings a green PR/MR up to date when the forge reports it behind its base.
 
 | | |
 |---|---|
@@ -931,15 +931,12 @@ ci:
   rebase_behind: true
 ```
 
-GitHub reports `BEHIND` only when the base branch requires branches to be up to date before merging, so the merge button stays disabled even though every check is green and nothing conflicts.
-A PR that is behind a base without that rule reads `CLEAN`, merges as it is, and is unaffected by this key.
+GitHub reports `BEHIND` only when the base branch requires branches to be up to date before merging. GitLab reports `need_rebase` when an MR must be rebased; both are treated as behind. A PR that is behind a base without an up-to-date requirement may still be mergeable and is unaffected by this key.
 
-- **`false` (default)** keeps the monitor's behavior from before the key existed: the PR reports `checks-passed` and waits for a human to bring it up to date.
-- **`true`** withholds `checks-passed` from such a PR. Once a second poll still sees it green and `BEHIND` at the same base tip, it takes the merge-conflict repair: rebase onto the PR base, revalidate from Review, and re-push through Push. A base that moves between those polls keeps the monitor waiting instead.
+- **`false` (default)**: the PR/MR reports `checks-passed` and waits for a human to bring it up to date.
+- **`true`**: after two green observations at the same base tip, no-mistakes rebases locally and compares `git patch-id --stable` for the full change against the old and new bases. When the bases are in one ancestry chain and patch IDs match, it carries the existing attestation to the new head and waits for the forge's normal CI run; no pipeline step or CI fix round is repeated. A conflict, changed patch, unreadable history, missing attestation, or moving base falls back to the existing full-validation repair path.
 
-Off by default because every rebase rewrites the head, so it always revalidates from Review (see [`ci.revalidate_repairs`](#cirevalidate_repairs)) and costs another full Review, Test, Document, and Lint pass each time the base advances.
-Each one also spends an [`auto_fix.ci`](#auto_fix) attempt.
-Other providers never report `BEHIND`, so the key only has an effect on GitHub.
+Off by default because even a clean rebase rewrites the head. Other providers that do not report an explicit behind state do not initiate this path; unknown or unsupported states retain the full-validation behavior.
 
 This value is read only from the trusted default-branch copy of this file, like the rest of the `ci` block: a pushed branch cannot opt itself into the extra passes, or out of them.
 A value set here wins over the operator's own [`ci.rebase_behind`](/no-mistakes/reference/global-config/#cirebase_behind) in both directions.
@@ -959,10 +956,10 @@ ci:
   carry_review_on_replay: true
 ```
 
-A merge-conflict repair, or a [`ci.rebase_behind`](#cirebase_behind) rebase, rewrites every branch commit, so continuity with the reviewed head cannot be shown by ancestry and the repair [revalidates from Review](#cirevalidate_repairs). Often the rebase changed nothing the reviewer looked at: the base moved, the branch's own commits replayed on top of it unchanged, and the full Review pass only re-approves the same diff.
+A merge-conflict repair, or a [`ci.rebase_behind`](#cirebase_behind) rebase that fails the deterministic stable-patch-id proof, rewrites the branch without provable continuity and [revalidates from Review](#cirevalidate_repairs). A conflict-free `ci.rebase_behind` update that passes its separate proof carries the full existing attestation without rerunning pipeline steps.
 
-- **`false` (default)** keeps that behavior exactly: every rebase repair revalidates from Review.
-- **`true`** first checks whether the repaired head is a **pure replay** of the reviewed head onto the base tip the repair targeted. If it is, the run's review approval moves to the replayed head and validation restarts at **Test**: Test, Document, Lint, Push, PR, and CI all run again against the new base, and only Review is not repeated. If it is not, the repair revalidates from Review as it would with the key off.
+- **`false` (default)** keeps the ordinary repair behavior: failed rebase proofs revalidate from Review.
+- **`true`** additionally allows the existing pure-replay proof for agent-driven CI rebase repairs to carry Review and restart at Test. The separate `ci.rebase_behind` fast path, when its stable patch IDs match, carries the whole attestation and reruns no pipeline steps.
 
 A rebase repair is a pure replay only when every part of this holds:
 

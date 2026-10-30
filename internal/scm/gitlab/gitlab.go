@@ -583,6 +583,8 @@ func (h *Host) GetMergeableState(ctx context.Context, pr *scm.PR) (scm.Mergeable
 		return scm.MergeableOK, nil
 	case "broken_status", "cannot_be_merged":
 		return scm.MergeableConflict, nil
+	case "need_rebase":
+		return scm.MergeableBehind, nil
 	case "checking", "unchecked", "ci_still_running", "":
 		return scm.MergeablePending, nil
 	default:
