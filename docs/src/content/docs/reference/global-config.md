@@ -637,7 +637,7 @@ Accepts any Go `time.ParseDuration` string: `30m`, `2h`, `4h30m`, etc.
 This is an idle timeout, not an absolute deadline: every time the base branch advances, the monitor re-arms it.
 So an actively-updated green PR keeps its monitor no matter how long it stays open; under [`ci.release_after_checks_pass`](#cirelease_after_checks_pass) that watch ends at the checks verdict instead.
 If it later develops an actual merge conflict (on GitHub, GitLab, Forgejo, Azure DevOps, Cursor Origin, or a provider plugin declaring `mergeable_state`), the CI auto-fix path rebases it, revalidates from Review because rebasing cannot prove continuity with the reviewed head, and publishes it through Push.
-A clean behind PR needs no command, except on GitHub when the base requires up-to-date branches (`mergeStateStatus: BEHIND`): that PR waits for a human to bring it up to date, unless [`ci.rebase_behind`](#cirebase_behind) is on.
+A clean behind PR/MR needs no command unless [`ci.rebase_behind`](#cirebase_behind) is on; GitHub reports `BEHIND` when the base requires up-to-date branches, and GitLab reports `need_rebase`.
 A genuinely idle/abandoned PR still parks at an approval gate after the timeout elapses.
 While that CI gate is parked, the daemon continues bounded read-only PR-state checks.
 If the PR is merged or closed externally, the stale gate completes automatically; an open, unknown, or temporarily unreachable PR remains parked for a user decision.
@@ -1047,7 +1047,7 @@ The per-repo [`ci.rerun_transient`](/no-mistakes/reference/repo-config/#cirerun_
 
 The operator-level fallback for [`ci.required_reviews`](/no-mistakes/reference/repo-config/#cirequired_reviews).
 That reference owns supported reviewer profiles, completion evidence, and the trust boundary.
-Defaults to `[]`; the trusted repository list overrides it, including an explicit empty list.
+Defaults to `[]`; the trusted repository list overrides it, including an explicit empty list. `ci.required_review_app_id` may pin the GHES CodeRabbit App ID; `ci.required_review_bot_id` may pin the GitLab CodeRabbit account ID. These are identifiers, not credentials, and must match the configured forge.
 
 ### ci.revalidate_repairs
 

@@ -18,6 +18,78 @@ func ciCarriesReviewOnReplay(sctx *pipeline.StepContext) bool {
 	return sctx.Config != nil && sctx.Config.CI.CarryReviewOnReplay && !sctx.Config.CI.RevalidateRepairs
 }
 
+// trivialRebasePatchIDGap proves that the patch from oldBase to oldHead is
+// unchanged when replayed from newBase to newHead. All four commits must be
+// available, both heads must descend from their respective bases, and the new
+// base must descend from the old base. Any uncertainty rejects the proof.
+func trivialRebasePatchIDGap(sctx *pipeline.StepContext, oldBase, oldHead, newBase, newHead string) string {
+	for _, ref := range []string{oldBase, oldHead, newBase, newHead} {
+		if _, err := stepGitRun(sctx, "rev-parse", "--verify", ref+"^{commit}"); err != nil {
+			return fmt.Sprintf("commit %s could not be resolved", shortObjectID(ref))
+		}
+	}
+	for _, pair := range [][2]string{{oldBase, oldHead}, {newBase, newHead}, {oldBase, newBase}} {
+		if _, err := stepGitRun(sctx, "merge-base", "--is-ancestor", pair[0], pair[1]); err != nil {
+			return fmt.Sprintf("%s is not an ancestor of %s", shortObjectID(pair[0]), shortObjectID(pair[1]))
+		}
+	}
+	for _, span := range [][2]string{{oldBase, oldHead}, {newBase, newHead}} {
+		merges, err := stepGitRun(sctx, "rev-list", "--merges", span[0]+".."+span[1])
+		if err != nil || merges != "" {
+			return "the rebased change contains merge commits or could not be inspected"
+		}
+	}
+	oldID, err := patchIDBetween(sctx, oldBase, oldHead)
+	if err != nil || oldID == "" {
+		return "the original change has no verifiable stable patch identity"
+	}
+	newID, err := patchIDBetween(sctx, newBase, newHead)
+	if err != nil || newID == "" {
+		return "the rebased change has no verifiable stable patch identity"
+	}
+	if oldID != newID {
+		return "stable patch identity changed during the rebase"
+	}
+	return ""
+}
+
+func verifyTrivialRebaseAttestation(sctx *pipeline.StepContext, proof *pipeline.TrivialRebaseAttestation) string {
+	if proof == nil || proof.OldHeadSHA == "" || proof.NewHeadSHA == "" || proof.OldBaseSHA == "" || proof.NewBaseSHA == "" || proof.PatchID == "" {
+		return "trivial-rebase attestation is incomplete"
+	}
+	currentHead, err := stepGitHeadSHA(sctx)
+	if err != nil || proof.NewHeadSHA != currentHead {
+		return "trivial-rebase attestation does not name the verified local head"
+	}
+	if gap := trivialRebasePatchIDGap(sctx, proof.OldBaseSHA, proof.OldHeadSHA, proof.NewBaseSHA, proof.NewHeadSHA); gap != "" {
+		return gap
+	}
+	patchID, err := patchIDBetween(sctx, proof.NewBaseSHA, proof.NewHeadSHA)
+	if err != nil || patchID != proof.PatchID {
+		return "recorded patch identity does not match the recomputed stable patch identity"
+	}
+	return ""
+}
+
+func patchIDBetween(sctx *pipeline.StepContext, base, head string) (string, error) {
+	diff, err := stepGitRunRaw(sctx, "diff", "--full-index", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", base, head)
+	if err != nil {
+		return "", err
+	}
+	if len(diff) == 0 {
+		return "", nil
+	}
+	cmd := stepCmd(sctx, "git", "patch-id", "--stable")
+	cmd.Env = git.NonInteractiveEnvFrom(cmd.Env, sctx.WorkDir)
+	cmd.Stdin = strings.NewReader(diff)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git patch-id --stable: %w", err)
+	}
+	return firstField(stdout.String()), nil
+}
+
 // reviewAnchoredGate returns the first repository gate that runs after Review,
 // or "". Carrying the approval restarts validation at Test, so such a gate
 // would be skipped for the replayed head; its presence keeps the full restart.

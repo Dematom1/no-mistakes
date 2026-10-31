@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -60,7 +61,16 @@ type pipelineAttestation struct {
 	// approved over a failing configured commands.test. Omitted when the repo
 	// has not opted in. Additive: older attestations without the field are
 	// read as not opted in.
-	AllowTestCommandOverride string `json:"allow_test_command_override,omitempty"`
+	AllowTestCommandOverride string                     `json:"allow_test_command_override,omitempty"`
+	TrivialRebase            *pipelineAttestationRebase `json:"trivial_rebase,omitempty"`
+}
+
+type pipelineAttestationRebase struct {
+	OldHeadSHA string `json:"old_head_sha"`
+	NewHeadSHA string `json:"new_head_sha"`
+	OldBaseSHA string `json:"old_base_sha"`
+	NewBaseSHA string `json:"new_base_sha"`
+	PatchID    string `json:"patch_id"`
 }
 
 type pipelineAttestationStep struct {
@@ -122,6 +132,7 @@ func BuildPipelineSummaryFor(steps []*db.StepResult, rounds map[string][]*db.Ste
 
 type pipelineAttestationPolicy struct {
 	AllowTestCommandOverride string
+	TrivialRebase            *pipeline.TrivialRebaseAttestation
 }
 
 func buildPipelineSummaryFor(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string, provider scm.Provider, policy pipelineAttestationPolicy) (string, string) {
@@ -193,6 +204,15 @@ func newPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.Step
 	attestation := pipelineAttestation{
 		HeadSHA: headSHA,
 		Steps:   make([]pipelineAttestationStep, 0, len(steps)),
+	}
+	if proof := policy.TrivialRebase; proof != nil && proof.NewHeadSHA == headSHA {
+		attestation.TrivialRebase = &pipelineAttestationRebase{
+			OldHeadSHA: proof.OldHeadSHA,
+			NewHeadSHA: proof.NewHeadSHA,
+			OldBaseSHA: proof.OldBaseSHA,
+			NewBaseSHA: proof.NewBaseSHA,
+			PatchID:    proof.PatchID,
+		}
 	}
 	for _, sr := range steps {
 		if sr == nil {
@@ -287,25 +307,45 @@ func rebindPipelineAttestationHead(body, newHeadSHA string) (string, bool) {
 // still returns the original body and false when no live attestation is
 // present, so a caller cannot mint one for a PR that was not raised through
 // no-mistakes.
+func pipelineAttestationHasRequiredSteps(attestation pipelineAttestation) bool {
+	completed := map[types.StepName]bool{}
+	for _, step := range attestation.Steps {
+		if step.Status == types.StepStatusCompleted {
+			completed[step.Step] = true
+		}
+	}
+	return completed[types.StepReview] && completed[types.StepTest] && completed[types.StepDocument]
+}
+
+func parsePipelineAttestationBody(body string) (pipelineAttestation, bool) {
+	if strings.Count(body, pipelineAttestationCommentPrefix) != 1 {
+		return pipelineAttestation{}, false
+	}
+	start := strings.Index(body, pipelineAttestationCommentPrefix) + len(pipelineAttestationCommentPrefix)
+	end := strings.Index(body[start:], pipelineAttestationCommentClosingToken)
+	if end < 0 {
+		return pipelineAttestation{}, false
+	}
+	var attestation pipelineAttestation
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil || attestation.HeadSHA == "" || attestation.Steps == nil {
+		return pipelineAttestation{}, false
+	}
+	return attestation, true
+}
+
 func rebindPipelineAttestationWithSteps(body, newHeadSHA string, steps []*db.StepResult, policy pipelineAttestationPolicy) (string, bool) {
 	newHeadSHA = strings.TrimSpace(newHeadSHA)
 	if newHeadSHA == "" {
 		return body, false
 	}
+	attestation, ok := parsePipelineAttestationBody(body)
+	if !ok {
+		return body, false
+	}
 	start := strings.Index(body, pipelineAttestationCommentPrefix)
-	if start < 0 {
-		return body, false
-	}
 	payloadStart := start + len(pipelineAttestationCommentPrefix)
-	endRel := strings.Index(body[payloadStart:], pipelineAttestationCommentClosingToken)
-	if endRel < 0 {
-		return body, false
-	}
-	end := payloadStart + endRel
-	var attestation pipelineAttestation
-	if err := json.Unmarshal([]byte(body[payloadStart:end]), &attestation); err != nil {
-		return body, false
-	}
+	end := strings.Index(body[payloadStart:], pipelineAttestationCommentClosingToken)
+	end += payloadStart
 	if steps == nil {
 		// A CI repair that did not re-run Test keeps the prior Test result,
 		// including an approved-over-failure override_reason. The caller's

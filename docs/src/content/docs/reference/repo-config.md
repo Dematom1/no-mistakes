@@ -780,13 +780,19 @@ Reruns are skipped when:
 ### ci.required_reviews
 
 An optional list of external reviewers that must finish before the CI monitor reports `checks-passed`.
-The default is `[]`; the only supported reviewer profile is `coderabbit` on GitHub.com.
+The default is `[]`; `coderabbit` is supported on GitHub.com, GitHub Enterprise Server (GHES) with its instance-local GitHub App ID pinned, and GitLab.
 Enable it in the trusted default branch's `.no-mistakes.yaml`:
 
 ```yaml
 ci:
   required_reviews: [coderabbit]
+  # GHES only: the immutable CodeRabbit GitHub App ID on this GHES instance.
+  required_review_app_id: 12345
+  # GitLab: immutable CodeRabbit account ID.
+  required_review_bot_id: "123456789"
 ```
+
+Omit `required_review_app_id` on GitHub.com; no-mistakes uses the documented app ID `347564` there. GHES requires this positive ID from that instance's CodeRabbit app; it does not infer identity from the mutable app slug. GitLab requires `required_review_bot_id` to match the CodeRabbit account's immutable ID. These settings are trusted-only, like the rest of `ci`.
 
 The whole `ci` block is trusted-only, even with `allow_repo_commands: true`.
 A pushed branch cannot disable the requirement or enable it for itself.
@@ -794,13 +800,12 @@ A repository value overrides the operator's global list; an explicit `[]` disabl
 Unknown or duplicate reviewer names fail configuration loading.
 
 CodeRabbit must already be installed for the repository by its administrator.
-no-mistakes uses the existing GitHub CLI authentication for read-only observation and adds no CodeRabbit credentials or installation flow.
+no-mistakes uses the provider CLI's existing authentication for read-only observation and adds no CodeRabbit credentials or installation flow.
 When the list is empty, no additional completion checks are made.
 Existing CI and Greptile behavior stays unchanged. CodeRabbit is recognized as a review bot only when this list names `coderabbit`: otherwise an installed CodeRabbit's check is an ordinary CI check and its review-thread comments are never findings, exactly as if no-mistakes had no CodeRabbit support. Once opted in, failed CodeRabbit checks use the same review-bot findings path as Greptile.
 
-Completion requires the latest `CodeRabbit` check run from GitHub.com app ID `347564`, a nonempty immutable check-run ID, `status: completed`, `conclusion: success`, and a `head_sha` matching the exact current PR head.
-The adapter pins the check query to that SHA and verifies the live PR head before and after discovery.
-Names, slugs, formal approvals, and review/comment bodies cannot establish completion.
+On GitHub.com/GHES, completion requires the latest `CodeRabbit` check run from the trusted app ID (`347564` on GitHub.com, or the configured instance-local ID on GHES), a nonempty immutable check-run ID, `status: completed`, `conclusion: success`, and a `head_sha` matching the exact current PR head. GitLab requires a comment from the configured bot account newer than the current source revision, and no unresolved bot thread; this timestamp-based check is weaker than an exact-SHA status check. GitLab compares against the MR version's `created_at` for the matching `head_commit_sha` and rereads the live PR head after discovery.
+Names, slugs, formal approvals, and review/comment bodies alone cannot establish completion.
 Unresolved CodeRabbit review-thread comments from the verified GitHub bot account become bounded `ask-user` findings in the existing review model, even when the required completion check succeeded.
 Every page of review threads and of each unresolved thread's comments is read; a response that cannot prove it is complete (missing comment nodes, an invalid page cursor, or an unreadable later page) leaves the review unverified rather than clean.
 Their bodies are untrusted evidence and cannot instruct the fix agent; the [CI step reference](/no-mistakes/reference/pipeline-steps/#ci) owns that shared handling.
@@ -817,10 +822,7 @@ That name or output title vetoes completion even alongside another successful ch
 A separately named rate-limit check remains blocking while GitHub still returns it among the latest checks at that head; no-mistakes does not guess from comment text that the limit has cleared.
 The monitor never posts review commands, requests a paid review, or retries a review on the provider's behalf.
 
-Strict gating on GitLab and other forges is unsupported and parks with an explicit unsupported finding when enabled.
-GitLab approvals and discussion activity are not a documented CodeRabbit completion signal.
-GitHub Enterprise Server is also unsupported because its separately installed app has a different immutable identity.
-Leave this setting empty on those platforms to retain normal CI behavior.
+Bitbucket, Azure DevOps, Gitea, Forgejo, Cursor Origin, and arbitrary provider plugins remain unsupported and park with an explicit unsupported finding when enabled. GitLab comment bodies are never treated as instructions or proof. See [CodeRabbit GitLab docs](https://docs.coderabbit.ai/platforms/gitlab-com) and the [GitLab Discussions API](https://docs.gitlab.com/api/discussions/).
 
 This gates no-mistakes readiness, not direct forge merges or merge-queue synthetic commits.
 The merge caller must recheck readiness for the current head and bind its merge request to that SHA.
@@ -916,7 +918,7 @@ A value set here wins over the operator's own [`ci.review_bot_comments`](/no-mis
 
 ### ci.rebase_behind
 
-Whether the CI monitor rebases a green GitHub PR that GitHub reports `mergeStateStatus: BEHIND`.
+Whether the CI monitor brings a green PR/MR up to date when the forge reports it behind its base.
 
 | | |
 |---|---|
@@ -929,15 +931,12 @@ ci:
   rebase_behind: true
 ```
 
-GitHub reports `BEHIND` only when the base branch requires branches to be up to date before merging, so the merge button stays disabled even though every check is green and nothing conflicts.
-A PR that is behind a base without that rule reads `CLEAN`, merges as it is, and is unaffected by this key.
+GitHub reports `BEHIND` only when the base branch requires branches to be up to date before merging. GitLab reports `need_rebase` when an MR must be rebased; both are treated as behind. A PR that is behind a base without an up-to-date requirement may still be mergeable and is unaffected by this key.
 
-- **`false` (default)** keeps the monitor's behavior from before the key existed: the PR reports `checks-passed` and waits for a human to bring it up to date.
-- **`true`** withholds `checks-passed` from such a PR. Once a second poll still sees it green and `BEHIND` at the same base tip, it takes the merge-conflict repair: rebase onto the PR base, revalidate from Review, and re-push through Push. A base that moves between those polls keeps the monitor waiting instead.
+- **`false` (default)**: the PR/MR reports `checks-passed` and waits for a human to bring it up to date.
+- **`true`**: after two green observations at the same base tip, no-mistakes rebases locally and compares `git patch-id --stable` for the full change against the old and new bases. When the bases are in one ancestry chain and patch IDs match, it carries the existing attestation to the new head and waits for the forge's normal CI run; no pipeline step or CI fix round is repeated. A conflict, changed patch, unreadable history, missing attestation, or moving base falls back to the existing full-validation repair path.
 
-Off by default because every rebase rewrites the head, so it always revalidates from Review (see [`ci.revalidate_repairs`](#cirevalidate_repairs)) and costs another full Review, Test, Document, and Lint pass each time the base advances.
-Each one also spends an [`auto_fix.ci`](#auto_fix) attempt.
-Other providers never report `BEHIND`, so the key only has an effect on GitHub.
+Off by default because even a clean rebase rewrites the head. Other providers that do not report an explicit behind state do not initiate this path; unknown or unsupported states retain the full-validation behavior.
 
 This value is read only from the trusted default-branch copy of this file, like the rest of the `ci` block: a pushed branch cannot opt itself into the extra passes, or out of them.
 A value set here wins over the operator's own [`ci.rebase_behind`](/no-mistakes/reference/global-config/#cirebase_behind) in both directions.
@@ -957,10 +956,10 @@ ci:
   carry_review_on_replay: true
 ```
 
-A merge-conflict repair, or a [`ci.rebase_behind`](#cirebase_behind) rebase, rewrites every branch commit, so continuity with the reviewed head cannot be shown by ancestry and the repair [revalidates from Review](#cirevalidate_repairs). Often the rebase changed nothing the reviewer looked at: the base moved, the branch's own commits replayed on top of it unchanged, and the full Review pass only re-approves the same diff.
+A merge-conflict repair, or a [`ci.rebase_behind`](#cirebase_behind) rebase that fails the deterministic stable-patch-id proof, rewrites the branch without provable continuity and [revalidates from Review](#cirevalidate_repairs). A conflict-free `ci.rebase_behind` update that passes its separate proof carries the full existing attestation without rerunning pipeline steps.
 
-- **`false` (default)** keeps that behavior exactly: every rebase repair revalidates from Review.
-- **`true`** first checks whether the repaired head is a **pure replay** of the reviewed head onto the base tip the repair targeted. If it is, the run's review approval moves to the replayed head and validation restarts at **Test**: Test, Document, Lint, Push, PR, and CI all run again against the new base, and only Review is not repeated. If it is not, the repair revalidates from Review as it would with the key off.
+- **`false` (default)** keeps the ordinary repair behavior: failed rebase proofs revalidate from Review.
+- **`true`** additionally allows the existing pure-replay proof for agent-driven CI rebase repairs to carry Review and restart at Test. The separate `ci.rebase_behind` fast path, when its stable patch IDs match, carries the whole attestation and reruns no pipeline steps.
 
 A rebase repair is a pure replay only when every part of this holds:
 

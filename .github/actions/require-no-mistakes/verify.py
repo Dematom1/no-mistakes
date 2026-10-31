@@ -63,6 +63,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -305,6 +306,30 @@ def check_head_bind(facts: Facts, attested_head: str) -> None:
     )
 
 
+def check_trivial_rebase(facts: Facts, payload: dict) -> None:
+    transition = payload.get("trivial_rebase")
+    if transition is None:
+        return
+    if not isinstance(transition, dict):
+        fail_missing_attestation(facts)
+    sha_pattern = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    patch_pattern = re.compile(r"^[0-9a-f]{40}$")
+    for field in ("old_head_sha", "new_head_sha", "old_base_sha", "new_base_sha"):
+        value = transition.get(field)
+        if not isinstance(value, str) or not sha_pattern.fullmatch(value):
+            fail_missing_attestation(facts)
+    patch_id = transition.get("patch_id")
+    if not isinstance(patch_id, str) or not patch_pattern.fullmatch(patch_id):
+        fail_missing_attestation(facts)
+    if transition["new_head_sha"] != payload["head_sha"] or transition["new_head_sha"] != facts.head_sha:
+        fail(
+            "::error::Trivial-rebase attestation does not bind its new_head_sha to the current PR head.\n\n"
+            "Re-run 'git push no-mistakes' so the attestation binds to the current head.\n"
+        )
+    if transition["old_head_sha"] == transition["new_head_sha"] or transition["old_base_sha"] == transition["new_base_sha"]:
+        fail_missing_attestation(facts)
+
+
 def check_required_steps(facts: Facts, steps: list) -> None:
     status_by_step: dict[str, str] = {}
     for item in steps:
@@ -428,6 +453,7 @@ def main() -> int:
 
     payload = parse_attestation(facts)
     check_head_bind(facts, payload["head_sha"])
+    check_trivial_rebase(facts, payload)
     check_required_steps(facts, payload["steps"])
     check_test_command_override(facts, payload)
 

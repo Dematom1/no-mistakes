@@ -833,6 +833,115 @@ func (s *CIStep) recordRepair(sctx *pipeline.StepContext, headSHA string) (ciRep
 // steps that depend on the base - Test onward - re-run. It reports carried =
 // false, having recorded nothing, whenever the proof does not hold, so the
 // caller takes the ordinary revalidation path.
+func (s *CIStep) tryTrivialBehindRebase(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, newBase string) (*pipeline.StepOutcome, bool, error) {
+	if host == nil || pr == nil || strings.TrimSpace(newBase) == "" || sctx.Fixing {
+		return nil, false, nil
+	}
+	reader, ok := host.(scm.PRContentReader)
+	if !ok {
+		return nil, false, nil
+	}
+	content, err := reader.GetPRContent(sctx.Ctx, pr)
+	if err != nil {
+		return nil, false, nil
+	}
+	attestation, ok := parsePipelineAttestationBody(content.Body)
+	if !ok {
+		return nil, false, nil
+	}
+	oldHead, err := stepGitHeadSHA(sctx)
+	if err != nil || oldHead != sctx.Run.HeadSHA || attestation.HeadSHA != oldHead || (pr.ObservedHeadSHA != "" && pr.ObservedHeadSHA != oldHead) {
+		return nil, false, nil
+	}
+	if !pipelineAttestationHasRequiredSteps(attestation) {
+		return nil, false, nil
+	}
+	oldBase := strings.TrimSpace(sctx.Run.BaseSHA)
+	if oldBase == "" {
+		return nil, false, nil
+	}
+	dirty, err := stepGitRun(sctx, "status", "--porcelain")
+	if err != nil {
+		return nil, false, err
+	}
+	if dirty != "" {
+		return nil, false, nil
+	}
+	if _, err := stepGitRun(sctx, "rebase", newBase); err != nil {
+		if _, abortErr := stepGitRun(sctx, "rebase", "--abort"); abortErr != nil {
+			return nil, false, fmt.Errorf("abort failed deterministic rebase: %w", abortErr)
+		}
+		if restored, headErr := stepGitHeadSHA(sctx); headErr != nil || restored != oldHead {
+			return nil, false, fmt.Errorf("failed rebase did not restore original head %s", shortObjectID(oldHead))
+		}
+		return nil, false, nil
+	}
+	newHead, err := stepGitHeadSHA(sctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if gap := trivialRebasePatchIDGap(sctx, oldBase, oldHead, newBase, newHead); gap != "" {
+		sctx.Log("behind-PR rebase did not pass the trivial-change proof: " + gap + "; restarting validation from Review")
+		repair, err := s.recordLocalRepair(sctx, newHead)
+		if err != nil {
+			return nil, true, err
+		}
+		return &pipeline.StepOutcome{RestartFrom: repair.restartFrom()}, true, nil
+	}
+	confirmedBase, resolved := resolveRunDefaultBranchTip(sctx.Ctx, sctx, oldBase, strings.TrimSpace(pr.BaseBranch))
+	if !resolved || confirmedBase != newBase {
+		sctx.Log("base moved during trivial-rebase verification; restarting validation from Review")
+		repair, err := s.recordLocalRepair(sctx, newHead)
+		if err != nil {
+			return nil, true, err
+		}
+		return &pipeline.StepOutcome{RestartFrom: repair.restartFrom()}, true, nil
+	}
+	run, err := sctx.DB.GetRun(sctx.Run.ID)
+	if err != nil {
+		return nil, true, err
+	}
+	approvedHead, _ := reviewApprovedHead(sctx, run)
+	if approvedHead != oldHead {
+		repair, err := s.recordLocalRepair(sctx, newHead)
+		if err != nil {
+			return nil, true, err
+		}
+		return &pipeline.StepOutcome{RestartFrom: repair.restartFrom()}, true, nil
+	}
+	patchID, err := patchIDBetween(sctx, newBase, newHead)
+	if err != nil || patchID == "" {
+		return nil, true, errors.Join(errors.New("could not record the stable patch identity"), err)
+	}
+	proof := &pipeline.TrivialRebaseAttestation{
+		OldHeadSHA: oldHead,
+		NewHeadSHA: newHead,
+		OldBaseSHA: oldBase,
+		NewBaseSHA: newBase,
+		PatchID:    patchID,
+	}
+	if gap := verifyTrivialRebaseAttestation(sctx, proof); gap != "" {
+		return nil, true, fmt.Errorf("trivial-rebase attestation verification failed: %s", gap)
+	}
+	carried, err := sctx.DB.UpdateRunHeadSHAWithReattestedReview(sctx.Run.ID, approvedHead, newHead)
+	if err != nil {
+		return nil, true, err
+	}
+	if !carried {
+		return nil, true, errors.New("review approval changed while recording trivial rebase")
+	}
+	sctx.Run.HeadSHA = newHead
+	sctx.Run.ReviewApprovedHeadSHA = &newHead
+	sctx.TrivialRebaseAttestation = proof
+	defer func() { sctx.TrivialRebaseAttestation = nil }()
+	pipeline.RemapUncertifiedPipelineRangeAfterRebase(sctx, oldHead, newHead)
+	if err := publishRunHead(sctx, newHead, "", nil); err != nil {
+		return nil, true, err
+	}
+	sctx.Log(fmt.Sprintf("trivial rebase verified: patch %s is unchanged from %s onto %s; carried the existing pipeline attestation to %s", patchID, shortObjectID(oldBase), shortObjectID(newBase), shortObjectID(newHead)))
+	return nil, true, nil
+}
+
 func (s *CIStep) recordReplayedRepair(sctx *pipeline.StepContext, headSHA, base string) (ciRepairResult, bool, error) {
 	run, err := sctx.DB.GetRun(sctx.Run.ID)
 	if err != nil {
@@ -1014,7 +1123,13 @@ func attestHeadBeforePush(sctx *pipeline.StepContext, headSHA string, steps []*d
 		}
 		return nil
 	}
-	if err := restampPRAttestationWithSteps(sctx.Ctx, host, pr, headSHA, steps, sctx.Log, attestationPolicyFrom(sctx)); err != nil {
+	policy := attestationPolicyFrom(sctx)
+	if policy.TrivialRebase != nil {
+		if gap := verifyTrivialRebaseAttestation(sctx, policy.TrivialRebase); gap != "" {
+			return fmt.Errorf("%w: trivial-rebase proof changed before attestation: %s", errAttestationWriteFailed, gap)
+		}
+	}
+	if err := restampPRAttestationWithSteps(sctx.Ctx, host, pr, headSHA, steps, sctx.Log, policy); err != nil {
 		return fmt.Errorf("%w: %w", errAttestationWriteFailed, err)
 	}
 	return nil
@@ -1024,6 +1139,9 @@ func attestationPolicyFrom(sctx *pipeline.StepContext) pipelineAttestationPolicy
 	policy := pipelineAttestationPolicy{}
 	if sctx != nil && sctx.Config != nil {
 		policy.AllowTestCommandOverride = strings.TrimSpace(sctx.Config.Test.AllowApproveOverFailure)
+	}
+	if sctx != nil {
+		policy.TrivialRebase = sctx.TrivialRebaseAttestation
 	}
 	return policy
 }
@@ -1057,6 +1175,12 @@ func restampPRAttestationWithSteps(ctx context.Context, host scm.Host, pr *scm.P
 	for attempt := 1; attempt <= attempts; attempt++ {
 		content, err := reader.GetPRContent(ctx, pr)
 		if err == nil {
+			if proof := policy.TrivialRebase; proof != nil {
+				current, ok := parsePipelineAttestationBody(content.Body)
+				if !ok || current.HeadSHA != proof.OldHeadSHA || proof.NewHeadSHA != newHeadSHA || !pipelineAttestationHasRequiredSteps(current) {
+					return errors.New("trivial-rebase attestation no longer matches the approved PR body")
+				}
+			}
 			updated, rebound, rebindErr := rebindOwnedPRAttestation(content.Body, newHeadSHA, steps, policy)
 			if rebindErr != nil {
 				return fmt.Errorf("rebind PR appendix: %w", rebindErr)

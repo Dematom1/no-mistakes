@@ -14,6 +14,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/testgit"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -113,6 +114,38 @@ func TestRebindPipelineAttestationHead_VerifyPyRoundTrip(t *testing.T) {
 	}
 	if got, out := runVerifyPy(t, unchanged, repairHead); got != "failure" || !strings.Contains(out, "not raised through no-mistakes") {
 		t.Fatalf("a PR not raised through no-mistakes must still fail, got %s\n%s", got, out)
+	}
+}
+
+func TestRebindPipelineAttestation_RecordsOnlyCurrentTrivialRebase(t *testing.T) {
+	t.Parallel()
+	oldHead, newHead := strings.Repeat("ab", 20), strings.Repeat("cd", 20)
+	proof := &pipeline.TrivialRebaseAttestation{
+		OldHeadSHA: oldHead,
+		NewHeadSHA: newHead,
+		OldBaseSHA: strings.Repeat("01", 20),
+		NewBaseSHA: strings.Repeat("23", 20),
+		PatchID:    strings.Repeat("ef", 20),
+	}
+	original := compliantPipelineBody(t, oldHead)
+	rebound, ok := rebindPipelineAttestationWithSteps(original, newHead, nil, pipelineAttestationPolicy{TrivialRebase: proof})
+	if !ok {
+		t.Fatal("attestation was not rebound")
+	}
+	got := parsePipelineAttestationForTest(t, rebound).TrivialRebase
+	if got == nil || got.OldHeadSHA != oldHead || got.NewHeadSHA != newHead || got.OldBaseSHA != proof.OldBaseSHA || got.NewBaseSHA != proof.NewBaseSHA || got.PatchID != proof.PatchID {
+		t.Fatalf("trivial rebase record = %+v, want %+v", got, proof)
+	}
+	if verdict, output := runVerifyPy(t, rebound, newHead); verdict != "success" {
+		t.Fatalf("valid trivial-rebase attestation rejected: %s\n%s", verdict, output)
+	}
+	altered := strings.Replace(rebound, `"new_head_sha":"`+newHead+`"`, `"new_head_sha":"`+oldHead+`"`, 1)
+	if verdict, _ := runVerifyPy(t, altered, newHead); verdict != "failure" {
+		t.Fatal("altered trivial-rebase head was accepted by require-no-mistakes")
+	}
+	cleared, ok := rebindPipelineAttestationWithSteps(rebound, strings.Repeat("34", 20), nil, pipelineAttestationPolicy{})
+	if !ok || parsePipelineAttestationForTest(t, cleared).TrivialRebase != nil {
+		t.Fatalf("stale trivial-rebase record survived a later rebind: %s", cleared)
 	}
 }
 
