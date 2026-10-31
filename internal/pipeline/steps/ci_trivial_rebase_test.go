@@ -57,10 +57,10 @@ func TestCIStep_ReattestsAnUnchangedBehindRebaseWithoutRestart(t *testing.T) {
 	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, oldHead)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	prURL := "https://github.com/tmp/fm-no-mistakes-trivial-rebase-reattest-r1/pull/42"
+	prURL := "https://github.com/var/folders/pull/42"
 	sctx.Run.PRURL = &prURL
 	sctx.Env = append(sctx.Env,
-		`FAKE_CLI_PR_LIST_JSON=[{"number":42,"url":"https://github.com/tmp/fm-no-mistakes-trivial-rebase-reattest-r1/pull/42","baseRefName":"main"}]`,
+		`FAKE_CLI_PR_LIST_JSON=[{"number":42,"url":"https://github.com/var/folders/pull/42","baseRefName":"main"}]`,
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 	)
 	host, reason := buildHost(sctx, scm.ProviderGitHub)
@@ -109,10 +109,10 @@ func TestCIStep_ConflictingBehindRebaseFallsBackWithoutMutation(t *testing.T) {
 	if err := os.WriteFile(bodyFile, []byte(compliantPipelineBody(t, oldHead)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	prURL := "https://github.com/tmp/fm-no-mistakes-trivial-rebase-reattest-r1/pull/42"
+	prURL := "https://github.com/var/folders/pull/42"
 	sctx.Run.PRURL = &prURL
 	sctx.Env = append(sctx.Env,
-		`FAKE_CLI_PR_LIST_JSON=[{"number":42,"url":"https://github.com/tmp/fm-no-mistakes-trivial-rebase-reattest-r1/pull/42","baseRefName":"main"}]`,
+		`FAKE_CLI_PR_LIST_JSON=[{"number":42,"url":"https://github.com/var/folders/pull/42","baseRefName":"main"}]`,
 		"FAKE_CLI_PR_BODY_FILE="+bodyFile,
 	)
 	host, reason := buildHost(sctx, scm.ProviderGitHub)
