@@ -1413,6 +1413,8 @@ func fetchRunDefaultBranch(ctx context.Context, workDir string, repo *db.Repo) e
 // caller-owned private ref on the gate. It does not rewrite origin tracking
 // refs, FETCH_HEAD, or any shared worktree ref, so a refused Pi pin cannot
 // perturb an in-flight validation that must stay running.
+var fetchIntentTrustedDefaultBranchSHA = fetchTrustedDefaultBranchSHA
+
 func fetchTrustedDefaultBranchSHA(ctx context.Context, gateDir string, repo *db.Repo, purpose string) (string, error) {
 	if strings.TrimSpace(repo.DefaultBranch) == "" {
 		return "", fmt.Errorf("cannot evaluate %s: repository has no known default branch to read trusted config from", purpose)
@@ -1472,28 +1474,24 @@ func applyPinnedIntentCheck(cfg *config.Config, run *db.Run) error {
 	return nil
 }
 
-func (m *RunManager) effectiveIntentCheckBeforeRun(ctx context.Context, repo *db.Repo, global *config.GlobalConfig) (config.IntentCheck, string, error) {
+func (m *RunManager) effectiveIntentCheckBeforeRun(ctx context.Context, repo *db.Repo, global *config.GlobalConfig, trustedSHA string) (config.IntentCheck, error) {
 	gateDir := m.paths.RepoDir(repo.ID)
-	trustedSHA, err := fetchTrustedDefaultBranchSHA(ctx, gateDir, repo, "intent check")
-	if err != nil {
-		return config.IntentCheck{}, "", err
-	}
 	entry, err := git.Run(ctx, gateDir, "ls-tree", trustedSHA, "--", ".no-mistakes.yaml")
 	if err != nil {
-		return config.IntentCheck{}, "", fmt.Errorf("cannot evaluate intent check: trusted tree is unreadable: %w", err)
+		return config.IntentCheck{}, fmt.Errorf("cannot evaluate intent check: trusted tree is unreadable: %w", err)
 	}
 	trusted := config.IntentCheck{Mode: config.IntentCheckOff}
 	if entry != "" {
 		content, err := git.ShowFile(ctx, gateDir, trustedSHA, ".no-mistakes.yaml")
 		if err != nil {
-			return config.IntentCheck{}, "", fmt.Errorf("cannot evaluate intent check: trusted config is unreadable: %w", err)
+			return config.IntentCheck{}, fmt.Errorf("cannot evaluate intent check: trusted config is unreadable: %w", err)
 		}
 		trusted, err = config.ParseIntentCheckYAML([]byte(content))
 		if err != nil {
-			return config.IntentCheck{}, "", fmt.Errorf("cannot evaluate intent check: trusted .no-mistakes.yaml is invalid: %w", err)
+			return config.IntentCheck{}, fmt.Errorf("cannot evaluate intent check: trusted .no-mistakes.yaml is invalid: %w", err)
 		}
 	}
-	return config.MergeIntentChecks(global.Intent.Check, trusted), trustedSHA, nil
+	return config.MergeIntentChecks(global.Intent.Check, trusted), nil
 }
 
 // effectiveConfigBeforeRun resolves the configuration a run at headSHA would
@@ -1630,14 +1628,25 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	}
 	var intentCheckJSON string
 	var trustedSHA string
+	var trustedFetchErr error
+	var err error
+	trustedFetchAttempted := false
 	if globalCfgErr == nil {
-		var err error
-		check, sha, err := m.effectiveIntentCheckBeforeRun(ctx, repo, globalCfg)
-		if err != nil {
-			trackStartFailure("intent_check_config")
-			return "", err
+		check := globalCfg.Intent.Check
+		trustedSHA, trustedFetchErr = fetchIntentTrustedDefaultBranchSHA(ctx, m.paths.RepoDir(repo.ID), repo, "intent check")
+		trustedFetchAttempted = true
+		if trustedFetchErr == nil {
+			check, err = m.effectiveIntentCheckBeforeRun(ctx, repo, globalCfg, trustedSHA)
+			if err != nil {
+				trackStartFailure("intent_check_config")
+				return "", err
+			}
+		} else {
+			// Keep intent checks unavailable when their trusted policy cannot be
+			// read; the same failed fetch is reused by trusted-config loading.
+			trustedSHA = ""
+			check = config.IntentCheck{Mode: config.IntentCheckOff}
 		}
-		trustedSHA = sha
 		// Resolve the effective policy, not just the global mode: a trusted
 		// repository rule must reject before cancelActiveRuns, including retries.
 		if check.Mode != config.IntentCheckOff {
@@ -1823,7 +1832,7 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// the resolve, a stale origin/<defaultBranch> left in the shared bare
 	// repo by a previous run could serve a trusted copy that the live default
 	// branch has already removed - silently running stale shell.
-	if trustedSHA == "" && repo.DefaultBranch != "" {
+	if !trustedFetchAttempted && repo.DefaultBranch != "" {
 		fetchErr := fetchRunDefaultBranch(ctx, wtDir, repo)
 		if fetchErr != nil {
 			slog.Warn("failed to fetch default branch into worktree; trusted config disabled (commands/agent from pushed branch will be dropped)", "run_id", run.ID, "branch", repo.DefaultBranch, "error", fetchErr)
@@ -1856,6 +1865,9 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	// commands/agent empty. An unreadable trusted tree aborts below.
 	// SECURITY: a trusted-config fetch failure must abort, not silently disable
 	// the disable_project_settings opt-out (see assertGateTrustedConfigReadable).
+	if trustedFetchErr != nil {
+		slog.Warn("failed to fetch default branch into worktree; trusted config disabled (commands/agent from pushed branch will be dropped)", "run_id", run.ID, "branch", repo.DefaultBranch, "error", trustedFetchErr)
+	}
 	if err := assertGateTrustedConfigReadable(ctx, wtDir, repo.DefaultBranch, trustedSHA); err != nil {
 		m.db.UpdateRunError(run.ID, err.Error())
 		trackStartFailure("trusted_config_unreadable")

@@ -16,6 +16,31 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 )
 
+func TestStartRunTrustedFetchFailureAdmitsWithoutRetry(t *testing.T) {
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step { return nil })
+	repo, head := setupTestGitRepo(t, p, d, "intent-fetch-failure")
+
+	oldFetch := fetchIntentTrustedDefaultBranchSHA
+	calls := 0
+	fetchIntentTrustedDefaultBranchSHA = func(context.Context, string, *db.Repo, string) (string, error) {
+		calls++
+		return "", errors.New("fetch unavailable")
+	}
+	t.Cleanup(func() { fetchIntentTrustedDefaultBranchSHA = oldFetch })
+
+	_, err := NewRunManager(d, p, nil).startRun(context.Background(), repo, "main", head, head, "push", nil, "", "", false, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
+		t.Fatalf("startRun error = %v, want trusted-config fail-closed error after admission", err)
+	}
+	if calls != 1 {
+		t.Fatalf("trusted default fetch calls = %d, want exactly 1", calls)
+	}
+	runs, err := d.GetRunsByRepo(repo.ID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("admitted runs = %d, err=%v; want the failed-fetch run recorded", len(runs), err)
+	}
+}
+
 func TestLoadRecoveredConfigUsesPinnedIntentCheck(t *testing.T) {
 	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step { return nil })
 	repo, head := setupTestGitRepo(t, p, d, "recovered-intent-check")
