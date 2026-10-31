@@ -29,8 +29,8 @@ func TestStartRunTrustedFetchFailureAdmitsWithoutRetry(t *testing.T) {
 	t.Cleanup(func() { fetchIntentTrustedDefaultBranchSHA = oldFetch })
 
 	_, err := NewRunManager(d, p, nil).startRun(context.Background(), repo, "main", head, head, "push", nil, "", "", false, "", nil)
-	if err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
-		t.Fatalf("startRun error = %v, want trusted-config fail-closed error after admission", err)
+	if err != nil {
+		t.Fatalf("startRun after trusted fetch failure = %v, want admission with intent checks off", err)
 	}
 	if calls != 1 {
 		t.Fatalf("trusted default fetch calls = %d, want exactly 1", calls)
