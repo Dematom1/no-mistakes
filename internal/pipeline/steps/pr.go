@@ -556,7 +556,7 @@ func (s *PRStep) draftPRContent(sctx *pipeline.StepContext, branch, baseBranch, 
 	inventory := prPromptInventory(sctx, finalDiff, baseSHA)
 	var pipelineMD, riskLine, testingMD, keptEvidence string
 	if keepsPRUpdateText(sctx) {
-		keptEvidence, err = s.buildPRAppendix(sctx, provider)
+		keptEvidence, err = s.recordedPREvidence(sctx, provider)
 		if err != nil {
 			return prContent{}, err
 		}
@@ -633,6 +633,10 @@ Final diff paths and statuses:
 					slog.Warn("normalized agent PR title", "from", originalTitle, "to", content.Title)
 				}
 				if keepsPRUpdateText(sctx) {
+					keptEvidence, err = s.buildPRAppendix(sctx, provider)
+					if err != nil {
+						return prContent{}, err
+					}
 					return publishKeptDraft(sctx, content.Title, content.Body, keptEvidence, bodyLimit)
 				}
 				content.Body = assembleDraftPRBody(sctx, content.Body, riskLine, testingMD, pipelineMD, bodyLimit, provider)

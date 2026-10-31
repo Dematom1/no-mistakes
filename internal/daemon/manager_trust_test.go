@@ -16,7 +16,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 )
 
-func TestStartRunTrustedFetchFailureAdmitsWithoutRetry(t *testing.T) {
+func TestStartRunTrustedFetchFailureAdmitsThenFailsBeforeAgent(t *testing.T) {
 	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step { return nil })
 	repo, head := setupTestGitRepo(t, p, d, "intent-fetch-failure")
 
@@ -29,8 +29,8 @@ func TestStartRunTrustedFetchFailureAdmitsWithoutRetry(t *testing.T) {
 	t.Cleanup(func() { fetchIntentTrustedDefaultBranchSHA = oldFetch })
 
 	_, err := NewRunManager(d, p, nil).startRun(context.Background(), repo, "main", head, head, "push", nil, "", "", false, "", nil)
-	if err != nil {
-		t.Fatalf("startRun after trusted fetch failure = %v, want admission with intent checks off", err)
+	if err == nil || !strings.Contains(err.Error(), "disable_project_settings") {
+		t.Fatalf("startRun after trusted fetch failure = %v, want trusted-config refusal", err)
 	}
 	if calls != 1 {
 		t.Fatalf("trusted default fetch calls = %d, want exactly 1", calls)

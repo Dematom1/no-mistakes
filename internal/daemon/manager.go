@@ -1868,12 +1868,10 @@ func (m *RunManager) startRunWithIntentSourceLocked(ctx context.Context, repo *d
 	if trustedFetchErr != nil {
 		slog.Warn("failed to fetch default branch into worktree; trusted config disabled (commands/agent from pushed branch will be dropped)", "run_id", run.ID, "branch", repo.DefaultBranch, "error", trustedFetchErr)
 	}
-	if trustedFetchErr == nil {
-		if err := assertGateTrustedConfigReadable(ctx, wtDir, repo.DefaultBranch, trustedSHA); err != nil {
-			m.db.UpdateRunError(run.ID, err.Error())
-			trackStartFailure("trusted_config_unreadable")
-			return "", err
-		}
+	if err := assertGateTrustedConfigReadable(ctx, wtDir, repo.DefaultBranch, trustedSHA); err != nil {
+		m.db.UpdateRunError(run.ID, err.Error())
+		trackStartFailure("trusted_config_unreadable")
+		return "", err
 	}
 	trustedRepoCfg := loadTrustedRepoConfig(ctx, wtDir, trustedSHA, run.ID)
 	allowRepoCommands := trustedRepoCfg != nil && trustedRepoCfg.AllowRepoCommands
