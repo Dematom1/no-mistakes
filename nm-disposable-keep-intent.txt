@@ -1,0 +1,1 @@
+disposable live check for keep-mode Intent (invalid)
